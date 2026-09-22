@@ -1,0 +1,19 @@
+{
+  "name": "notification-hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "个人用信息整合 agent-app：把通知原文交给 AI 提炼要点，生成信息卡",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @notification-hub/web dev",
+    "dev:server": "pnpm --filter @notification-hub/server dev",
+    "build": "pnpm --filter @notification-hub/server build && pnpm --filter @notification-hub/web build",
+    "start": "pnpm --filter @notification-hub/server start",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "verify": "pnpm typecheck && pnpm test"
+  }
+}

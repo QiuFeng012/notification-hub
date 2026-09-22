@@ -1,0 +1,8 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# esbuild（vite / vitest 的依赖）需要通过安装脚本下载平台二进制，显式放行。
+# 其余依赖不在此列表中，即默认不执行安装脚本，减少供应链风险。
+allowBuilds:
+  esbuild: true

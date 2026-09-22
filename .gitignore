@@ -1,0 +1,27 @@
+# 依赖
+node_modules/
+
+# 构建产物
+dist/
+
+# 本地数据（信息卡数据库，属于个人数据，不入库）
+data/
+*.db
+*.db-journal
+*.db-wal
+
+# 密钥：绝不提交
+.env
+.env.local
+.env.*.local
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 测试与工具缓存
+coverage/
+*.log
+.eslintcache
