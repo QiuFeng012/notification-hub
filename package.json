@@ -19,6 +19,7 @@
     "typecheck": "pnpm -r typecheck",
     "verify": "pnpm typecheck && pnpm test",
     "smoke": "tsx scripts/smoke.mts",
-    "verify:ui": "tsx scripts/ui-delete-check.mts"
+    "verify:ui": "tsx scripts/ui-delete-check.mts",
+    "verify:launcher": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify-launcher.ps1"
   }
 }
