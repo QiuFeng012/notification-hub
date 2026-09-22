@@ -37,8 +37,7 @@ export default function App({ api }: AppProps = {}) {
 
       {!loading && cards.some((card) => card.provider === 'mock') ? (
         <p className="notice notice--mock">
-          当前有卡片来自<strong>启发式摘要</strong>（按关键词与日期规则挑句子，不是 AI 总结）。
-          在仓库根目录创建 <code>.env</code> 并填入 <code>DEEPSEEK_API_KEY</code>，重启后即启用 DeepSeek 真实总结。
+          含<strong>启发式摘要</strong>卡片——填入 <code>DEEPSEEK_API_KEY</code> 后启用 DeepSeek 真实总结。
         </p>
       ) : null}
 

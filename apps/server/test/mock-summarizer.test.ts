@@ -71,6 +71,25 @@ describe('createMockSummarizer', () => {
     assert.ok(!draft.title.endsWith('。'), `标题应去掉句末标点：${draft.title}`);
   });
 
+  it('剥掉标题首尾的装饰符号、emoji 与成对引号', async () => {
+    const { draft } = await summarizer.summarize(
+      '❗️“身心共美，社区同行学生社区文化月开幕式活动❗️\n时间：9月22日（周二）',
+    );
+    assert.equal(draft.title, '身心共美，社区同行学生社区文化月开幕式活动');
+  });
+
+  it('剥掉 Markdown 强调符与项目符号', async () => {
+    const { draft } = await summarizer.summarize('- **重要通知**：明天上午停水三小时，请提前储水。');
+    assert.equal(draft.title, '重要通知：明天上午停水三小时，请提前储水');
+  });
+
+  it('整句都是装饰符号时不会产出空标题', async () => {
+    const { draft } = await summarizer.summarize('❗️❗️❗️❗️\n请于3月8日前提交报名表，逾期不再受理。');
+    assert.ok(draft.title.length > 0, '标题不应为空');
+    assert.ok(!draft.title.startsWith('❗'), `标题不应以装饰符开头：${draft.title}`);
+    assert.match(draft.title, /3月8日/);
+  });
+
   it('过滤掉寒暄类噪声行', async () => {
     const { draft } = await summarizer.summarize('收到\n谢谢\n请于3月8日前提交报名表，联系人张老师。');
     assert.ok(!draft.keyPoints.some((point) => point === '收到' || point === '谢谢'));

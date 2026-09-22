@@ -129,9 +129,24 @@ function extractTime(text: string): string | null {
   return null;
 }
 
-/** 去掉抬头、收尾标点，得到干净的标题文本 */
+/**
+ * 去掉抬头、首尾装饰符号与收尾标点，得到干净的标题文本。
+ *
+ * 通知类文本常见 ❗️/🔥/📢 等装饰、Markdown 强调符与成对引号包裹，
+ * 它们不是信息，出现在标题里会显得很脏。成对引号只在两端同时出现时才剥掉，
+ * 避免破坏正文里本来就有的引号。
+ */
+const LEADING_DECORATION = /^[\s：:，,、。；;!?！？~～*#>=\-—·•"'“”‘’…\u2600-\u27BF\uFE0F\u2B00-\u2BFF\u{1F000}-\u{1FAFF}]+/u;
+const TRAILING_DECORATION = /[\s：:，,、。；;!?！？~～*#>=\-—·•"'“”‘’…\u2600-\u27BF\uFE0F\u2B00-\u2BFF\u{1F000}-\u{1FAFF}]+$/u;
+/** 行内 Markdown 强调与代码标记 */
+const INLINE_EMPHASIS = /(\*\*|__|`|~~|\*|_)/g;
+
 function cleanTitle(unit: string): string {
-  return unit.replace(BRACKET_PREFIX, '').replace(/^[：:，,\s]+/, '').replace(/[。；;，,、\s]+$/, '');
+  return unit
+    .replace(BRACKET_PREFIX, '')
+    .replace(INLINE_EMPHASIS, '')
+    .replace(LEADING_DECORATION, '')
+    .replace(TRAILING_DECORATION, '');
 }
 
 /**
@@ -148,17 +163,21 @@ export function createMockSummarizer(): Summarizer {
       const searchable = rawText.slice(0, 2000);
 
       const candidates = units.filter(isSubstantive);
-      const titleSource = candidates[0] ?? units[0] ?? '';
-      const title = truncate(cleanTitle(titleSource), MAX_TITLE_LENGTH);
+      // 清洗要在挑选之前完成：纯装饰行（"❗️❗️❗️"）清洗后为空，不应被选中当标题
+      const cleaned = candidates
+        .map((unit, index) => ({ text: cleanTitle(unit), score: scoreUnit(unit, index) }))
+        .filter((item) => item.text.length > 0);
+
+      const title = truncate(cleaned[0]?.text ?? '', MAX_TITLE_LENGTH);
 
       const keyPoints =
-        candidates.length === 0
+        cleaned.length === 0
           ? ['未从原文中识别出有效要点，请确认粘贴的是通知正文，或配置 DEEPSEEK_API_KEY 使用 AI 总结']
-          : candidates
-              .map((unit, index) => ({ unit, score: scoreUnit(unit, index) }))
+          : cleaned
+              .slice()
               .sort((a, b) => b.score - a.score)
               .slice(0, MAX_KEY_POINTS)
-              .map((item) => truncate(cleanTitle(item.unit), MAX_KEY_POINT_LENGTH));
+              .map((item) => truncate(item.text, MAX_KEY_POINT_LENGTH));
 
       const draft: CardDraft = {
         title: title || '未识别标题的通知',
