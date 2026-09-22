@@ -174,6 +174,42 @@ describe('DELETE /api/cards/:id', () => {
     assert.equal(response.json().error.code, 'INVALID_ID');
     await app.close();
   });
+
+  it('不带 Content-Type 的 DELETE 正常删除（前端实际发出的形态）', async () => {
+    const { app } = await makeApp();
+    const card = (await createCard(app, '待删除通知')).json();
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `/api/cards/${card.id}`,
+      headers: {},
+    });
+    assert.equal(response.statusCode, 200);
+    await app.close();
+  });
+
+  // 契约测试：这曾经是删除失败的根因。前端给无 body 的 DELETE 加了
+  // Content-Type: application/json，请求在进入路由前就被解析器拒绝。
+  // 断言服务端这个行为是有意为之的，避免有人"顺手"放宽后前端再踩坑。
+  it('声明 application/json 却不带 body 的 DELETE 会被解析器拒绝', async () => {
+    const { app } = await makeApp();
+    const card = (await createCard(app, '待删除通知')).json();
+
+    const response = await app.inject({
+      method: 'DELETE',
+      url: `/api/cards/${card.id}`,
+      headers: { 'content-type': 'application/json' },
+    });
+
+    assert.ok(
+      response.statusCode >= 400 && response.statusCode < 500,
+      `应为 4xx，实际 ${response.statusCode}`,
+    );
+    // 卡片必须还在，说明请求没到业务逻辑
+    const body = (await app.inject({ method: 'GET', url: '/api/cards' })).json();
+    assert.equal(body.total, 1);
+    await app.close();
+  });
 });
 
 describe('未注册的接口', () => {

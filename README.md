@@ -41,10 +41,15 @@ pnpm dev            # 终端 2：前端 http://127.0.0.1:5173（Vite HMR，/api 
 ## 验证
 
 ```bash
-pnpm verify         # 类型检查 + 全部测试
-pnpm test           # 仅测试
-pnpm typecheck      # 仅类型检查
+pnpm verify         # 类型检查 + 全部单元/组件测试
+pnpm smoke          # 真实链路冒烟：真客户端打真服务端（需先 pnpm start）
+pnpm verify:ui      # 真实界面验证：无头浏览器点击删除按钮（需先 pnpm start）
 ```
+
+`pnpm smoke` 与 `pnpm verify:ui` 存在的意义：单元测试里的 `fetch` 是 mock，不校验请求头与
+协议细节。曾经因此漏掉一个让删除功能完全崩溃的缺陷——前端给没有 body 的 `DELETE` 请求加了
+`Content-Type: application/json`，Fastify 的 JSON 解析器直接以 `FST_ERR_CTP_EMPTY_JSON_BODY`
+拒绝。这两个脚本跑的是真实浏览器 / 真实客户端 / 真实服务端，专门拦这一类问题。
 
 ## 目录结构
 
@@ -61,6 +66,7 @@ apps/web/             前端：React + Vite
   src/lib/            API 客户端、卡片视图归一化
   test/               组件与工具函数的测试
 packages/shared/      前后端共享的信息卡类型定义
+scripts/              真实链路验证脚本（冒烟 + 界面点击）
 ```
 
 ## 接口

@@ -7,6 +7,9 @@
   "engines": {
     "node": ">=22.5.0"
   },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  },
   "scripts": {
     "dev": "pnpm --filter @notification-hub/web dev",
     "dev:server": "pnpm --filter @notification-hub/server dev",
@@ -14,6 +17,8 @@
     "start": "pnpm --filter @notification-hub/server start",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "verify": "pnpm typecheck && pnpm test"
+    "verify": "pnpm typecheck && pnpm test",
+    "smoke": "tsx scripts/smoke.mts",
+    "verify:ui": "tsx scripts/ui-delete-check.mts"
   }
 }

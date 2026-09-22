@@ -69,6 +69,14 @@ describe('createCardApi.createCard', () => {
     expect(JSON.parse(String(init?.body))).toEqual({ rawText: '通知原文' });
   });
 
+  it('带 body 的请求声明 application/json', async () => {
+    const spy = mockFetch(() => jsonResponse(SERVER_CARD, 201));
+    await createCardApi().createCard('通知原文');
+
+    const headers = (spy.mock.calls[0]?.[1]?.headers ?? {}) as Record<string, string>;
+    expect(headers['Content-Type']).toBe('application/json');
+  });
+
   it('服务端返回结构不对时抛出 INVALID_RESPONSE', async () => {
     mockFetch(() => jsonResponse({ title: '缺少 id' }, 201));
     await expect(createCardApi().createCard('通知')).rejects.toMatchObject({
@@ -116,6 +124,18 @@ describe('createCardApi.deleteCard', () => {
     const [url, init] = spy.mock.calls[0] ?? [];
     expect(url).toBe(`/api/cards/${SERVER_CARD.id}`);
     expect(init?.method).toBe('DELETE');
+  });
+
+  // 回归测试：曾经无条件加 Content-Type，而 DELETE 没有 body，
+  // Fastify 会直接以 FST_ERR_CTP_EMPTY_JSON_BODY 拒绝，导致删除功能完全不可用。
+  it('DELETE 不带 Content-Type，也不带 body', async () => {
+    const spy = mockFetch(() => new Response(null, { status: 200 }));
+    await createCardApi().deleteCard(SERVER_CARD.id);
+
+    const init = spy.mock.calls[0]?.[1];
+    const headers = (init?.headers ?? {}) as Record<string, string>;
+    expect(headers['Content-Type']).toBeUndefined();
+    expect(init?.body).toBeUndefined();
   });
 
   it('404 时抛出 CARD_NOT_FOUND', async () => {

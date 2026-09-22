@@ -16,12 +16,20 @@ export class ApiError extends Error {
   }
 }
 
-async function requestJson(path: string, init?: RequestInit): Promise<unknown> {
+async function requestJson(path: string, init?: RequestInit & { json?: unknown }): Promise<unknown> {
+  const { json, ...rest } = init ?? {};
+  // 只有真正带 body 的请求才声明 Content-Type：
+  // 给无 body 的 DELETE 加 application/json 会让服务端 JSON 解析器以
+  // FST_ERR_CTP_EMPTY_JSON_BODY 直接拒绝，请求根本到不了业务逻辑。
+  const headers: Record<string, string> = { ...((rest.headers as Record<string, string>) ?? {}) };
+  if (json !== undefined) headers['Content-Type'] = 'application/json';
+
   let response: Response;
   try {
     response = await fetch(path, {
-      ...init,
-      headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+      ...rest,
+      headers,
+      ...(json !== undefined ? { body: JSON.stringify(json) } : {}),
     });
   } catch {
     throw new ApiError('NETWORK_ERROR', '无法连接到本地服务，请确认服务端已启动', 0);
@@ -68,7 +76,7 @@ export function createCardApi(): CardApi {
     async createCard(rawText: string) {
       const payload = (await requestJson('/api/cards', {
         method: 'POST',
-        body: JSON.stringify({ rawText }),
+        json: { rawText },
       })) as InfoCard;
 
       const view = toCardView(payload);
