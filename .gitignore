@@ -25,3 +25,6 @@ Thumbs.db
 coverage/
 *.log
 .eslintcache
+
+# 界面截图（scripts/screenshot.mts 的产物，仅用于人工核对）
+/*.png

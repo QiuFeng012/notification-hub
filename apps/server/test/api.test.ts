@@ -1,9 +1,14 @@
 import assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { after, describe, it } from 'node:test';
 import { MAX_RAW_TEXT_LENGTH } from '@notification-hub/shared';
 import { buildApp } from '../src/app.js';
 import { createMemoryCardRepository } from '../src/db/sqlite-repository.js';
 import { createCardService, ValidationError } from '../src/services/card-service.js';
+import { createSettingsService } from '../src/services/settings-service.js';
+import { createSettingsStore } from '../src/settings/settings-store.js';
 import type { Summarizer } from '../src/ai/types.js';
 
 /** 确定性摘要器：不需要联网，产出固定内容，便于断言接口行为 */
@@ -27,9 +32,41 @@ const failingSummarizer: Summarizer = {
   },
 };
 
-async function makeApp(summarizer: Summarizer = stubSummarizer) {
+const tempDirs: string[] = [];
+
+after(() => {
+  for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+});
+
+/** 建一个隔离的设置服务，避免测试互相污染，也不碰真实的 data/settings.json */
+function makeSettingsService(envApiKey: string | null = null) {
+  const dir = mkdtempSync(path.join(tmpdir(), 'notification-hub-api-'));
+  tempDirs.push(dir);
+  const store = createSettingsStore({
+    filePath: path.join(dir, 'settings.json'),
+    envApiKey,
+    defaultBaseUrl: 'https://api.deepseek.com',
+    defaultModel: 'deepseek-chat',
+  });
+  return createSettingsService({
+    store,
+    defaultBaseUrl: 'https://api.deepseek.com',
+    defaultModel: 'deepseek-chat',
+    // 让"验证 Key"这一步在测试里确定性地成功，不真的联网
+    fetchImpl: (async () =>
+      new Response(JSON.stringify({ choices: [{ message: { content: '{"title":"t","key_points":["a"]}' } }] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })) as typeof fetch,
+  });
+}
+
+async function makeApp(summarizer: Summarizer = stubSummarizer, envApiKey: string | null = null) {
   const repo = createMemoryCardRepository();
-  const app = await buildApp({ cardService: createCardService(repo, summarizer) });
+  const app = await buildApp({
+    cardService: createCardService(repo, summarizer),
+    settingsService: makeSettingsService(envApiKey),
+  });
   return { app, repo };
 }
 
@@ -228,5 +265,129 @@ describe('createCardService 参数校验', () => {
       () => service.createCard({ rawText: null }),
       (error: unknown) => error instanceof ValidationError && error.code === 'INVALID_BODY',
     );
+  });
+});
+
+describe('GET /api/settings', () => {
+  it('未配置时返回 mock 与默认地址', async () => {
+    const { app } = await makeApp();
+    const body = (await app.inject({ method: 'GET', url: '/api/settings' })).json();
+    assert.equal(body.configured, false);
+    assert.equal(body.source, 'mock');
+    assert.equal(body.apiKeyMask, null);
+    assert.equal(body.baseUrl, 'https://api.deepseek.com');
+    await app.close();
+  });
+
+  it('来自环境变量时 source 为 env', async () => {
+    const { app } = await makeApp(stubSummarizer, 'sk-from-env-1234567890');
+    const body = (await app.inject({ method: 'GET', url: '/api/settings' })).json();
+    assert.equal(body.configured, true);
+    assert.equal(body.source, 'env');
+    await app.close();
+  });
+
+  // 安全断言：完整密钥绝不能出现在接口响应里
+  it('响应里只有掩码，绝不含完整 Key', async () => {
+    const { app } = await makeApp();
+    const secret = 'sk-super-secret-value-0001';
+    await app.inject({ method: 'PUT', url: '/api/settings', payload: { apiKey: secret } });
+
+    const response = await app.inject({ method: 'GET', url: '/api/settings' });
+    assert.ok(!response.body.includes(secret), '响应体不应包含完整 Key');
+    const body = response.json();
+    assert.equal(body.source, 'user');
+    assert.equal(body.configured, true);
+    assert.match(body.apiKeyMask, /^sk-sup/);
+    assert.ok(body.apiKeyMask.includes('…'));
+    await app.close();
+  });
+});
+
+describe('PUT /api/settings', () => {
+  it('保存合法 Key 后配置生效', async () => {
+    const { app } = await makeApp();
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      payload: { apiKey: 'sk-valid-key-abcdefg' },
+    });
+
+    assert.equal(response.statusCode, 200);
+    const body = response.json();
+    assert.equal(body.settings.configured, true);
+    assert.equal(body.settings.source, 'user');
+    assert.equal(body.warning, null);
+    await app.close();
+  });
+
+  it('可以只改 baseUrl 与模型名', async () => {
+    const { app } = await makeApp();
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      payload: { baseUrl: 'https://proxy.example.com/v1', model: 'deepseek-reasoner' },
+    });
+
+    const body = response.json();
+    assert.equal(body.settings.baseUrl, 'https://proxy.example.com/v1');
+    assert.equal(body.settings.model, 'deepseek-reasoner');
+    // 没有 Key 时仍然是 mock 模式
+    assert.equal(body.settings.source, 'mock');
+    await app.close();
+  });
+
+  it('apiKey 传空字符串表示清除已保存的 Key', async () => {
+    const { app } = await makeApp();
+    await app.inject({ method: 'PUT', url: '/api/settings', payload: { apiKey: 'sk-first-key-123456' } });
+    assert.equal((await app.inject({ method: 'GET', url: '/api/settings' })).json().configured, true);
+
+    const response = await app.inject({ method: 'PUT', url: '/api/settings', payload: { apiKey: '' } });
+    assert.equal(response.json().settings.configured, false);
+    await app.close();
+  });
+
+  it('字段类型不对返回 400 INVALID_BODY', async () => {
+    const { app } = await makeApp();
+    const response = await app.inject({ method: 'PUT', url: '/api/settings', payload: { apiKey: 123 } });
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.json().error.code, 'INVALID_BODY');
+    await app.close();
+  });
+
+  it('Key 过长返回 400 VALUE_TOO_LONG', async () => {
+    const { app } = await makeApp();
+    const response = await app.inject({
+      method: 'PUT',
+      url: '/api/settings',
+      payload: { apiKey: 'x'.repeat(201) },
+    });
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.json().error.code, 'VALUE_TOO_LONG');
+    await app.close();
+  });
+});
+
+describe('DELETE /api/settings', () => {
+  it('清除后回落到未配置状态', async () => {
+    const { app } = await makeApp();
+    await app.inject({ method: 'PUT', url: '/api/settings', payload: { apiKey: 'sk-to-be-cleared-1234' } });
+
+    const response = await app.inject({ method: 'DELETE', url: '/api/settings' });
+    assert.equal(response.statusCode, 200);
+    assert.equal(response.json().configured, false);
+    await app.close();
+  });
+
+  it('有环境变量 Key 时，清除用户配置后回落到 env', async () => {
+    const { app } = await makeApp(stubSummarizer, 'sk-env-fallback-5678');
+    await app.inject({ method: 'PUT', url: '/api/settings', payload: { apiKey: 'sk-user-override-9999' } });
+    assert.equal((await app.inject({ method: 'GET', url: '/api/settings' })).json().source, 'user');
+
+    await app.inject({ method: 'DELETE', url: '/api/settings' });
+    const body = (await app.inject({ method: 'GET', url: '/api/settings' })).json();
+    assert.equal(body.source, 'env');
+    assert.equal(body.configured, true);
+    await app.close();
   });
 });

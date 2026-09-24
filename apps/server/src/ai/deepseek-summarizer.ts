@@ -1,5 +1,5 @@
 import { parseSummaryResponse } from './parse.js';
-import { SummaryError, type Summarizer } from './types.js';
+import { InvalidApiKeyError, SummaryError, type Summarizer } from './types.js';
 
 /** 交给模型的系统提示：只允许输出 JSON，字段语义写死，避免每次输出结构漂移 */
 export const SYSTEM_PROMPT = `你是一个通知信息提炼助手，服务于个人使用的信息整合工具。
@@ -40,6 +40,12 @@ interface ChatCompletionResponse {
 }
 
 /**
+ * 一次最小化的 API 调用，用来确认用户填的 Key 能不能用。
+ * 只发一个单字消息，花费可以忽略。
+ */
+const VALIDATION_USER_MESSAGE = '在吗';
+
+/**
  * 真实 AI 摘要器：调用 DeepSeek 的 OpenAI 兼容接口。
  *
  * 开启 response_format=json_object 让模型只吐 JSON；即便如此解析层仍做兜底，
@@ -51,53 +57,64 @@ export function createDeepSeekSummarizer(options: DeepSeekSummarizerOptions): Su
   const timeoutMs = options.timeoutMs ?? 45_000;
   const doFetch = options.fetchImpl ?? fetch;
 
-  return {
-    async summarize(rawText: string) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
+  /** 发一次请求并返回模型文本；把 HTTP 错误翻译成可读的异常 */
+  async function callModel(userContent: string, maxTokens: number | null): Promise<string> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-      let content: string;
-      try {
-        const response = await doFetch(`${baseUrl}/chat/completions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${options.apiKey}`,
-          },
-          body: JSON.stringify({
-            model,
-            messages: [
-              { role: 'system', content: SYSTEM_PROMPT },
-              { role: 'user', content: rawText },
-            ],
-            response_format: { type: 'json_object' },
-            temperature: 0.2,
-            stream: false,
-          }),
-          signal: controller.signal,
-        });
+    try {
+      const response = await doFetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${options.apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: userContent },
+          ],
+          response_format: { type: 'json_object' },
+          temperature: 0.2,
+          stream: false,
+          ...(maxTokens === null ? {} : { max_tokens: maxTokens }),
+        }),
+        signal: controller.signal,
+      });
 
-        if (!response.ok) {
-          const detail = await response.text().catch(() => '');
-          throw new SummaryError(
-            `DeepSeek 接口返回 ${response.status}${detail ? `：${detail.slice(0, 200)}` : ''}`,
-          );
+      if (!response.ok) {
+        const detail = await response.text().catch(() => '');
+        const suffix = detail ? `：${detail.slice(0, 200)}` : '';
+        // 401/403 明确说明是密钥问题。调用方据此区分"Key 不对"和"网络/限流"
+        if (response.status === 401 || response.status === 403) {
+          throw new InvalidApiKeyError(`DeepSeek 拒绝了这个 API Key（HTTP ${response.status}）${suffix}`);
         }
-
-        const payload = (await response.json()) as ChatCompletionResponse;
-        content = payload.choices?.[0]?.message?.content ?? '';
-      } catch (error) {
-        if (error instanceof SummaryError) throw error;
-        if (error instanceof Error && error.name === 'AbortError') {
-          throw new SummaryError(`调用 DeepSeek 超时（${timeoutMs}ms）`);
-        }
-        const reason = error instanceof Error ? error.message : String(error);
-        throw new SummaryError(`调用 DeepSeek 失败：${reason}`);
-      } finally {
-        clearTimeout(timer);
+        throw new SummaryError(`DeepSeek 接口返回 ${response.status}${suffix}`);
       }
 
+      const payload = (await response.json()) as ChatCompletionResponse;
+      return payload.choices?.[0]?.message?.content ?? '';
+    } catch (error) {
+      if (error instanceof SummaryError) throw error;
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new SummaryError(`调用 DeepSeek 超时（${timeoutMs}ms）`);
+      }
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new SummaryError(`调用 DeepSeek 失败：${reason}`);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  return {
+    async summarize(rawText: string) {
+      const content = await callModel(rawText, null);
       return { draft: parseSummaryResponse(content, rawText), provider: 'deepseek' as const };
+    },
+
+    async validate() {
+      await callModel(VALIDATION_USER_MESSAGE, 16);
     },
   };
 }

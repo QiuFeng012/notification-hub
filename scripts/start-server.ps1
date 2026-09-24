@@ -153,23 +153,24 @@ if (-not $ready) {
 
 Write-Ok "服务已启动（PID $($process.Id)，监听 127.0.0.1:$Port）"
 
-# 只在 .env 存在且真的匹配到 Key 时才取值。
-# 直接写 (...).Matches.Groups[1].Value 会在没有 .env 时抛
-# "Cannot index into a null array"，让整个脚本以失败告终 ——
-# 用户双击时只会看到窗口一闪而过。
-$apiKey = $env:DEEPSEEK_API_KEY
-if ([string]::IsNullOrWhiteSpace($apiKey)) {
-  $envFile = Join-Path $RepoRoot '.env'
-  if (Test-Path $envFile) {
-    $match = Select-String -Path $envFile -Pattern '^\s*DEEPSEEK_API_KEY\s*=\s*(.+?)\s*$' -ErrorAction SilentlyContinue |
-      Select-Object -First 1
-    if ($match) { $apiKey = $match.Matches[0].Groups[1].Value }
-  }
+# 摘要模式直接问服务端，而不是自己猜。
+# 用户可能在界面上保存过 Key，那只存在于 data/settings.json 里，
+# 只读环境变量会误报"未配置"。
+$settings = $null
+try {
+  $settings = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/settings" -TimeoutSec 3
+} catch {
+  $settings = $null
 }
-if ([string]::IsNullOrWhiteSpace($apiKey)) {
-  Write-Warn2 "未配置 DEEPSEEK_API_KEY，当前为本地启发式摘要（卡片会标注为非 AI）"
+
+if (-not $settings) {
+  Write-Warn2 "无法读取当前设置，请在界面上的「API 设置」里确认"
+} elseif ($settings.configured -eq $true) {
+  $origin = if ($settings.source -eq 'user') { '界面保存' } else { '环境变量' }
+  Write-Ok "已配置 API Key（$origin），模型 $($settings.model)，使用 DeepSeek 真实总结"
 } else {
-  Write-Ok "已配置 DEEPSEEK_API_KEY，使用 DeepSeek 真实总结"
+  Write-Warn2 "未配置 API Key，当前为本地启发式摘要（卡片会标注为非 AI）"
+  Write-Host "       在页面左上的「API 设置」里填入 DeepSeek API Key 即可启用真实 AI 总结。" -ForegroundColor DarkGray
 }
 
 Write-Host ""

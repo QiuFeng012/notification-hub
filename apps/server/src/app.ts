@@ -5,9 +5,13 @@ import path from 'node:path';
 import { SummaryError } from './ai/types.js';
 import type { CardService } from './services/card-service.js';
 import { ValidationError } from './services/card-service.js';
+import type { SettingsService } from './services/settings-service.js';
+import { SettingsValidationError } from './services/settings-service.js';
 
 export interface BuildAppOptions {
   cardService: CardService;
+  /** 省略时不注册 /api/settings 路由（供只关心信息卡的测试使用） */
+  settingsService?: SettingsService;
   /** 已构建的前端资源目录；不存在就只提供 API */
   webDistPath?: string;
   logger?: boolean;
@@ -34,6 +38,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
         .code(VALIDATION_STATUS[error.code] ?? 400)
         .send({ error: { code: error.code, message: error.message } });
     }
+    if (error instanceof SettingsValidationError) {
+      return reply.code(400).send({ error: { code: error.code, message: error.message } });
+    }
     if (error instanceof SummaryError) {
       return reply.code(502).send({ error: { code: 'SUMMARY_FAILED', message: error.message } });
     }
@@ -56,6 +63,32 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   });
 
   app.get('/api/health', async () => ({ ok: true }));
+
+  // ---------- API 设置 ----------
+  // 注意：响应里永远只有 Key 的掩码，完整密钥不出服务端。
+  const settingsService = options.settingsService;
+  if (settingsService) {
+    app.get('/api/settings', async () => settingsService.get());
+
+    app.put('/api/settings', async (request) => {
+      const body = (request.body ?? {}) as { apiKey?: unknown; baseUrl?: unknown; model?: unknown };
+      const patch: { apiKey?: string; baseUrl?: string; model?: string } = {};
+
+      for (const field of ['apiKey', 'baseUrl', 'model'] as const) {
+        const value = body[field];
+        if (value === undefined) continue;
+        if (typeof value !== 'string') {
+          throw new ValidationError('INVALID_BODY', `${field} 必须是字符串`);
+        }
+        patch[field] = value;
+      }
+
+      // 保存前会真实调用一次模型接口验证 Key，见 settings-service
+      return settingsService.update(patch);
+    });
+
+    app.delete('/api/settings', async () => settingsService.clear());
+  }
 
   app.get('/api/cards', async () => options.cardService.listCards());
 

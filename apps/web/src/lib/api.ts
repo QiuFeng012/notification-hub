@@ -1,4 +1,11 @@
-import type { CardListResponse, InfoCard } from '@notification-hub/shared';
+import type {
+  CardListResponse,
+  InfoCard,
+  SettingsSource,
+  SettingsView,
+  UpdateSettingsRequest,
+  UpdateSettingsResponse,
+} from '@notification-hub/shared';
 import { toCardView, type CardView } from './card-view';
 
 /**
@@ -88,6 +95,51 @@ export function createCardApi(): CardApi {
 
     async deleteCard(id: string) {
       await requestJson(`/api/cards/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    },
+  };
+}
+
+export interface SettingsApi {
+  getSettings(): Promise<SettingsView>;
+  updateSettings(patch: UpdateSettingsRequest): Promise<UpdateSettingsResponse>;
+  /** 清除已保存的配置，回落到环境变量或本地启发式摘要 */
+  clearSettings(): Promise<SettingsView>;
+}
+
+/** 归一化服务端返回的设置，缺字段时给出安全默认值 */
+export function toSettingsView(input: unknown): SettingsView {
+  const record = (typeof input === 'object' && input !== null ? input : {}) as Partial<SettingsView>;
+  const source: SettingsSource =
+    record.source === 'user' || record.source === 'env' || record.source === 'mock' ? record.source : 'mock';
+  return {
+    configured: record.configured === true,
+    apiKeyMask: typeof record.apiKeyMask === 'string' && record.apiKeyMask.length > 0 ? record.apiKeyMask : null,
+    source,
+    baseUrl: typeof record.baseUrl === 'string' ? record.baseUrl : '',
+    model: typeof record.model === 'string' ? record.model : '',
+  };
+}
+
+export function createSettingsApi(): SettingsApi {
+  return {
+    async getSettings() {
+      return toSettingsView(await requestJson('/api/settings'));
+    },
+
+    async updateSettings(patch) {
+      const payload = (await requestJson('/api/settings', {
+        method: 'PUT',
+        json: patch,
+      })) as Partial<UpdateSettingsResponse> | null;
+
+      return {
+        settings: toSettingsView(payload?.settings),
+        warning: typeof payload?.warning === 'string' && payload.warning.length > 0 ? payload.warning : null,
+      };
+    },
+
+    async clearSettings() {
+      return toSettingsView(await requestJson('/api/settings', { method: 'DELETE' }));
     },
   };
 }

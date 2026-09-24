@@ -37,6 +37,11 @@ export interface AppConfig {
   host: string;
   /** SQLite 数据库文件绝对路径 */
   dbPath: string;
+  /**
+   * 用户界面保存的设置文件绝对路径（含 API Key 明文）。
+   * 放在 data/ 下，已被 .gitignore 覆盖；写入时尽量收紧文件权限。
+   */
+  settingsPath: string;
   /** DeepSeek API Key，为空时回退到 mock 摘要器 */
   deepseekApiKey: string | null;
   deepseekBaseUrl: string;
@@ -56,14 +61,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, moduleDir = imp
   const repoRoot = findRepoRoot(moduleDir);
   const apiKey = env.DEEPSEEK_API_KEY?.trim();
   const dbPathRaw = env.DB_PATH?.trim();
+  const dbPath = dbPathRaw
+    ? path.resolve(repoRoot, dbPathRaw)
+    : path.join(repoRoot, 'data', 'cards.db');
+  const settingsPathRaw = env.SETTINGS_PATH?.trim();
 
   return {
     repoRoot,
     port: readPort(env.PORT),
     host: LOOPBACK_HOST,
-    dbPath: dbPathRaw
-      ? path.resolve(repoRoot, dbPathRaw)
-      : path.join(repoRoot, 'data', 'cards.db'),
+    dbPath,
+    // 默认与数据库同目录，保持"个人数据都在 data/ 下"这一条规则
+    settingsPath: settingsPathRaw
+      ? path.resolve(repoRoot, settingsPathRaw)
+      : path.join(path.dirname(dbPath), 'settings.json'),
     deepseekApiKey: apiKey && apiKey.length > 0 ? apiKey : null,
     deepseekBaseUrl: env.DEEPSEEK_BASE_URL?.trim() || DEFAULT_BASE_URL,
     deepseekModel: env.DEEPSEEK_MODEL?.trim() || DEFAULT_MODEL,

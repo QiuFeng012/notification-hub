@@ -47,3 +47,54 @@ export interface ApiError {
 
 /** 输入长度上限，避免误粘贴超长内容把 token 烧穿 */
 export const MAX_RAW_TEXT_LENGTH = 8000;
+
+/** API Key 长度上限，防止误粘贴整段文本 */
+export const MAX_API_KEY_LENGTH = 200;
+/** base URL 长度上限 */
+export const MAX_BASE_URL_LENGTH = 300;
+/** 模型名长度上限 */
+export const MAX_MODEL_LENGTH = 100;
+
+/** 当前生效的摘要来源 */
+export type SettingsSource =
+  /** 用户在界面上填写的 Key（存在 data/settings.json） */
+  | 'user'
+  /** 来自环境变量 / .env 的 Key */
+  | 'env'
+  /** 没有 Key，使用本地启发式摘要 */
+  | 'mock';
+
+/**
+ * 设置视图。**永远不包含完整 Key**，只回显掩码，
+ * 避免密钥经由接口或浏览器缓存泄漏。
+ */
+export interface SettingsView {
+  /** 是否已配置可用的 API Key */
+  configured: boolean;
+  /** Key 掩码，如 "sk-1234…cdef"；未配置为 null */
+  apiKeyMask: string | null;
+  source: SettingsSource;
+  /** 生效的 base URL */
+  baseUrl: string;
+  /** 生效的模型名 */
+  model: string;
+}
+
+/** PUT /api/settings 的请求体：只传要改的字段，未传的保持不变 */
+export interface UpdateSettingsRequest {
+  /** 新的 API Key；空字符串表示清除已保存的 Key */
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+}
+
+/** PUT /api/settings 的响应：保存后的设置，加上一条可选提示 */
+export interface UpdateSettingsResponse {
+  settings: SettingsView;
+  /**
+   * 非致命提示。Key 校验遇到网络问题、限流等无法判定真伪的情况时，
+   * 仍然保存，但把原因告诉用户，而不是假装一切正常。
+   */
+  warning: string | null;
+}
+

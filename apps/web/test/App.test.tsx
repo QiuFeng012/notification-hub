@@ -1,8 +1,9 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import type { SettingsView } from '@notification-hub/shared';
 import App from '../src/App';
-import { ApiError, type CardApi } from '../src/lib/api';
+import { ApiError, type CardApi, type SettingsApi } from '../src/lib/api';
 import type { CardView } from '../src/lib/card-view';
 
 function makeCard(overrides: Partial<CardView> = {}): CardView {
@@ -16,6 +17,17 @@ function makeCard(overrides: Partial<CardView> = {}): CardView {
     provider: 'deepseek',
     createdAt: '2025-03-05T06:32:00.000Z',
     createdAtLabel: '2025-03-05 14:32',
+    ...overrides,
+  };
+}
+
+function makeSettings(overrides: Partial<SettingsView> = {}): SettingsView {
+  return {
+    configured: false,
+    apiKeyMask: null,
+    source: 'mock',
+    baseUrl: 'https://api.deepseek.com',
+    model: 'deepseek-chat',
     ...overrides,
   };
 }
@@ -35,8 +47,29 @@ function createFakeApi(options: FakeApiOptions = {}) {
   return api;
 }
 
-function renderApp(api: CardApi) {
-  return render(<App api={api} />);
+interface FakeSettingsApiOptions {
+  initial?: SettingsView;
+  updateImpl?: (patch: { apiKey?: string; baseUrl?: string; model?: string }) => Promise<{
+    settings: SettingsView;
+    warning: string | null;
+  }>;
+  clearImpl?: () => Promise<SettingsView>;
+}
+
+function createFakeSettingsApi(options: FakeSettingsApiOptions = {}) {
+  const api: SettingsApi = {
+    getSettings: vi.fn(async () => options.initial ?? makeSettings()),
+    updateSettings: vi.fn(
+      options.updateImpl ??
+        (async () => ({ settings: makeSettings(), warning: null })),
+    ),
+    clearSettings: vi.fn(options.clearImpl ?? (async () => makeSettings())),
+  };
+  return api;
+}
+
+function renderApp(api: CardApi, settingsApi: SettingsApi = createFakeSettingsApi()) {
+  return render(<App api={api} settingsApi={settingsApi} />);
 }
 
 describe('空态', () => {
@@ -166,26 +199,32 @@ describe('信息卡展示', () => {
     expect(document.querySelector('.chip--ai')).toBeNull();
   });
 
-  it('列表含 mock 卡片时提示如何启用 AI 总结', async () => {
+  it('未配置 Key 时提示去 API 设置里填', async () => {
     renderApp(createFakeApi({ initial: [makeCard({ provider: 'mock' })] }));
     await screen.findByText('选课开放通知');
 
     const notice = document.querySelector('.notice--mock');
     expect(notice).not.toBeNull();
-    expect(notice?.textContent).toContain('启发式摘要');
-    expect(notice?.textContent).toContain('DEEPSEEK_API_KEY');
+    expect(notice?.textContent).toContain('本地启发式摘要');
+    expect(notice?.textContent).toContain('API 设置');
   });
 
-  it('全部是 AI 摘要时不显示 mock 提示', async () => {
-    renderApp(createFakeApi({ initial: [makeCard({ provider: 'deepseek' })] }));
+  it('未配置 Key 时，没有卡片也提示去配置', async () => {
+    renderApp(createFakeApi());
+
+    await screen.findByText('还没有信息卡');
+    expect(document.querySelector('.notice--mock')).not.toBeNull();
+  });
+
+  it('已配置 Key 时不显示 mock 提示', async () => {
+    renderApp(
+      createFakeApi({ initial: [makeCard({ provider: 'mock' })] }),
+      createFakeSettingsApi({
+        initial: makeSettings({ configured: true, apiKeyMask: 'sk-1234…cdef', source: 'user' }),
+      }),
+    );
 
     await screen.findByText('选课开放通知');
-    expect(document.querySelector('.notice--mock')).toBeNull();
-  });
-
-  it('没有卡片时不显示 mock 提示', async () => {
-    renderApp(createFakeApi());
-    await screen.findByText('还没有信息卡');
     expect(document.querySelector('.notice--mock')).toBeNull();
   });
 
@@ -263,5 +302,174 @@ describe('删除信息卡', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('删除失败：信息卡不存在或已被删除');
     expect(screen.getByText('选课开放通知')).toBeInTheDocument();
+  });
+});
+
+describe('API 设置', () => {
+  it('默认折叠，只显示当前模式', async () => {
+    renderApp(createFakeApi());
+
+    const toggle = await screen.findByRole('button', { name: /API 设置/ });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(toggle).toHaveTextContent('未配置，正在使用本地启发式摘要');
+    expect(screen.queryByLabelText('DeepSeek API Key')).not.toBeInTheDocument();
+  });
+
+  it('展开后显示已保存 Key 的掩码，输入框保持为空', async () => {
+    renderApp(
+      createFakeApi(),
+      createFakeSettingsApi({
+        initial: makeSettings({ configured: true, apiKeyMask: 'sk-abc123…cdef', source: 'user' }),
+      }),
+    );
+
+    await userEvent.click(await screen.findByRole('button', { name: /API 设置/ }));
+
+    expect(screen.getByText('sk-abc123…cdef')).toBeInTheDocument();
+    // 完整 Key 不应回填到输入框
+    expect(screen.getByLabelText('DeepSeek API Key')).toHaveValue('');
+  });
+
+  it('填写 Key 后保存，提交的是用户输入的值', async () => {
+    const settingsApi = createFakeSettingsApi({
+      updateImpl: async (patch) => ({
+        settings: makeSettings({
+          configured: true,
+          apiKeyMask: 'sk-user…9999',
+          source: 'user',
+          baseUrl: patch.baseUrl ?? 'https://api.deepseek.com',
+          model: patch.model ?? 'deepseek-chat',
+        }),
+        warning: null,
+      }),
+    });
+    renderApp(createFakeApi(), settingsApi);
+
+    await userEvent.click(await screen.findByRole('button', { name: /API 设置/ }));
+    await userEvent.type(screen.getByLabelText('DeepSeek API Key'), 'sk-user-key-9999');
+    await userEvent.click(screen.getByRole('button', { name: '保存并验证' }));
+
+    await waitFor(() =>
+      expect(settingsApi.updateSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ apiKey: 'sk-user-key-9999' }),
+      ),
+    );
+    expect(await screen.findByText('设置已保存')).toBeInTheDocument();
+    expect(screen.queryByText(/本地启发式摘要/)).not.toBeInTheDocument();
+  });
+
+  it('保存后折叠面板并清空输入框', async () => {
+    const settingsApi = createFakeSettingsApi({
+      updateImpl: async () => ({
+        settings: makeSettings({ configured: true, apiKeyMask: 'sk-user…9999', source: 'user' }),
+        warning: null,
+      }),
+    });
+    renderApp(createFakeApi(), settingsApi);
+
+    await userEvent.click(await screen.findByRole('button', { name: /API 设置/ }));
+    await userEvent.type(screen.getByLabelText('DeepSeek API Key'), 'sk-user-key-9999');
+    await userEvent.click(screen.getByRole('button', { name: '保存并验证' }));
+
+    await screen.findByText('设置已保存');
+    expect(screen.queryByLabelText('DeepSeek API Key')).not.toBeInTheDocument();
+  });
+
+  it('留空保存时不提交 apiKey，避免把已有 Key 冲掉', async () => {
+    const settingsApi = createFakeSettingsApi({
+      initial: makeSettings({ configured: true, apiKeyMask: 'sk-abc123…cdef', source: 'user' }),
+      updateImpl: async () => ({
+        settings: makeSettings({ configured: true, apiKeyMask: 'sk-abc123…cdef', source: 'user' }),
+        warning: null,
+      }),
+    });
+    renderApp(createFakeApi(), settingsApi);
+
+    await userEvent.click(await screen.findByRole('button', { name: /API 设置/ }));
+    await userEvent.click(screen.getByRole('button', { name: '保存并验证' }));
+
+    await waitFor(() => expect(settingsApi.updateSettings).toHaveBeenCalled());
+    const patch = vi.mocked(settingsApi.updateSettings).mock.calls[0]?.[0];
+    expect(patch).not.toHaveProperty('apiKey');
+  });
+
+  it('Key 被拒绝时保留面板并展示服务端原因', async () => {
+    const settingsApi = createFakeSettingsApi({
+      updateImpl: async () => {
+        throw new ApiError('INVALID_API_KEY', 'DeepSeek 拒绝了这个 API Key（HTTP 401）', 400);
+      },
+    });
+    renderApp(createFakeApi(), settingsApi);
+
+    await userEvent.click(await screen.findByRole('button', { name: /API 设置/ }));
+    await userEvent.type(screen.getByLabelText('DeepSeek API Key'), 'sk-wrong');
+    await userEvent.click(screen.getByRole('button', { name: '保存并验证' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('DeepSeek 拒绝了这个 API Key');
+    // 面板保持展开，用户可以直接改
+    expect(screen.getByLabelText('DeepSeek API Key')).toBeInTheDocument();
+  });
+
+  it('验证无法判定时仍保存，但把原因告诉用户', async () => {
+    const settingsApi = createFakeSettingsApi({
+      updateImpl: async () => ({
+        settings: makeSettings({ configured: true, apiKeyMask: 'sk-user…9999', source: 'user' }),
+        warning: '设置已保存，但没能验证通过：调用 DeepSeek 超时（15000ms）',
+      }),
+    });
+    renderApp(createFakeApi(), settingsApi);
+
+    await userEvent.click(await screen.findByRole('button', { name: /API 设置/ }));
+    await userEvent.type(screen.getByLabelText('DeepSeek API Key'), 'sk-user-key-9999');
+    await userEvent.click(screen.getByRole('button', { name: '保存并验证' }));
+
+    expect(await screen.findByRole('status')).toHaveTextContent('没能验证通过');
+  });
+
+  it('已配置时可以清除，清除后回到未配置状态', async () => {
+    const settingsApi = createFakeSettingsApi({
+      initial: makeSettings({ configured: true, apiKeyMask: 'sk-abc123…cdef', source: 'user' }),
+      clearImpl: async () => makeSettings({ configured: false, apiKeyMask: null, source: 'mock' }),
+    });
+    renderApp(createFakeApi(), settingsApi);
+
+    await userEvent.click(await screen.findByRole('button', { name: /API 设置/ }));
+    await userEvent.click(screen.getByRole('button', { name: '清除' }));
+
+    await waitFor(() => expect(settingsApi.clearSettings).toHaveBeenCalled());
+    expect(await screen.findByText('已清除保存的 Key')).toBeInTheDocument();
+  });
+
+  it('未配置时不显示清除按钮', async () => {
+    renderApp(createFakeApi());
+
+    await userEvent.click(await screen.findByRole('button', { name: /API 设置/ }));
+    expect(screen.queryByRole('button', { name: '清除' })).not.toBeInTheDocument();
+  });
+
+  it('Key 过长时阻止保存并提示', async () => {
+    const settingsApi = createFakeSettingsApi();
+    renderApp(createFakeApi(), settingsApi);
+
+    await userEvent.click(await screen.findByRole('button', { name: /API 设置/ }));
+    // 直接设值，避免逐字输入 201 个字符
+    const input = screen.getByLabelText('DeepSeek API Key');
+    await userEvent.type(input, 'x'.repeat(201));
+
+    expect(screen.getByText(/Key 过长/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存并验证' })).toBeDisabled();
+    expect(settingsApi.updateSettings).not.toHaveBeenCalled();
+  });
+
+  it('服务端返回 env 来源时标注清楚', async () => {
+    renderApp(
+      createFakeApi(),
+      createFakeSettingsApi({
+        initial: makeSettings({ configured: true, apiKeyMask: 'sk-env…0001', source: 'env' }),
+      }),
+    );
+
+    const toggle = await screen.findByRole('button', { name: /API 设置/ });
+    expect(toggle).toHaveTextContent('已配置（来自环境变量）');
   });
 });

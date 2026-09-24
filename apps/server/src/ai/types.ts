@@ -19,6 +19,12 @@ export interface SummaryResult {
 /** 摘要器：把通知原文提炼成信息卡草稿 */
 export interface Summarizer {
   summarize(rawText: string): Promise<SummaryResult>;
+  /**
+   * 可选：验证凭据是否可用。
+   * 只有真实模型摘要器才实现它；本地启发式摘要器无需验证。
+   * 抛 InvalidApiKeyError 表示确定是密钥问题，抛其他异常表示无法判定。
+   */
+  validate?(): Promise<void>;
 }
 
 /** 模型输出无法解析时抛出，由上层转成 502 并附上可读原因 */
@@ -26,6 +32,18 @@ export class SummaryError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'SummaryError';
+  }
+}
+
+/**
+ * API Key 被服务端明确拒绝（401/403）。
+ * 单独成类是为了让"Key 填错了"和"网络不通 / 被限流"能被区分对待：
+ * 前者拒绝保存，后者仍然保存但给出提示。
+ */
+export class InvalidApiKeyError extends SummaryError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidApiKeyError';
   }
 }
 

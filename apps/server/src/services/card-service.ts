@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { MAX_RAW_TEXT_LENGTH, type InfoCard } from '@notification-hub/shared';
 import type { Summarizer } from '../ai/types.js';
+import type { SummarizerProvider } from '../ai/provider.js';
 import type { CardRepository } from '../db/repository.js';
 
 /** 业务规则被违反时抛出，由 HTTP 层映射成 4xx */
@@ -45,11 +46,24 @@ function normalizeRawText(value: unknown): string {
   return trimmed;
 }
 
-export function createCardService(repo: CardRepository, summarizer: Summarizer): CardService {
+/**
+ * 摘要来源：可以直接给一个固定摘要器（测试里方便），
+ * 也可以给 Provider——后者每次请求都取当前设置对应的摘要器，
+ * 这样用户在界面上填完 Key 立刻生效，不需要重启服务。
+ */
+type SummarizerSource = Summarizer | SummarizerProvider;
+
+function isProvider(source: SummarizerSource): source is SummarizerProvider {
+  return typeof (source as SummarizerProvider).get === 'function';
+}
+
+export function createCardService(repo: CardRepository, source: SummarizerSource): CardService {
+  const resolveSummarizer = (): Summarizer => (isProvider(source) ? source.get() : source);
+
   return {
     async createCard(input) {
       const rawText = normalizeRawText(input.rawText);
-      const { draft, provider } = await summarizer.summarize(rawText);
+      const { draft, provider } = await resolveSummarizer().summarize(rawText);
 
       const card: InfoCard = {
         id: randomUUID(),

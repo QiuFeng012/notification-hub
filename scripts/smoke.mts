@@ -65,6 +65,42 @@ async function main(): Promise<void> {
   }
   check('重复删除会抛错', errored);
 
+  console.log('5. API 设置接口（只读检查，不改动你的配置）');
+  const settingsResponse = await fetch(`${baseUrl}/api/settings`);
+  check('GET /api/settings 返回 200', settingsResponse.ok, `HTTP ${settingsResponse.status}`);
+  const settingsText = await settingsResponse.text();
+  const settings = JSON.parse(settingsText) as Record<string, unknown>;
+
+  check('返回 configured 字段', typeof settings.configured === 'boolean');
+  check(
+    'source 取值合法',
+    settings.source === 'user' || settings.source === 'env' || settings.source === 'mock',
+    `实际 ${String(settings.source)}`,
+  );
+  check('未配置时掩码为 null', settings.configured === true || settings.apiKeyMask === null);
+  console.log(`     当前来源：${String(settings.source)}，模型：${String(settings.model)}`);
+
+  // 安全断言：接口响应里不该出现任何形似完整密钥的长串
+  const looksLikeFullKey = /sk-[A-Za-z0-9_-]{20,}/.test(settingsText);
+  check('响应里不含完整密钥', !looksLikeFullKey);
+  if (settings.configured === true) {
+    console.log(`     Key 掩码：${String(settings.apiKeyMask)}`);
+  }
+
+  console.log('6. 非法设置应被拒绝而不是 500');
+  const tooLong = await fetch(`${baseUrl}/api/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apiKey: 'x'.repeat(201) }),
+  });
+  check('超长 Key 返回 400', tooLong.status === 400, `HTTP ${tooLong.status}`);
+  const wrongType = await fetch(`${baseUrl}/api/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ apiKey: 123 }),
+  });
+  check('字段类型不对返回 400', wrongType.status === 400, `HTTP ${wrongType.status}`);
+
   console.log(process.exitCode === 1 ? '\n冒烟测试失败' : '\n冒烟测试全部通过');
 }
 
