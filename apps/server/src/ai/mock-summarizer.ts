@@ -156,9 +156,14 @@ function cleanTitle(unit: string): string {
  * 目的有两个：让没有 Key 的人也能把整条链路跑通；让每次产出的结构稳定可测。
  * 产出会被标记 provider='mock'，前端显式提示"这是启发式摘要，非 AI 生成"。
  */
+/** 单个关注点的提权幅度：必须显著高于通用信号词的分值，
+ *  否则用户明确指定的关注点会被"截止/请"这类通用规则盖过去，功能就白做了。 */
+const KEYWORD_BOOST = 20;
+
 export function createMockSummarizer(): Summarizer {
   return {
-    summarize(rawText: string) {
+    summarize(input) {
+      const { rawText, keywords } = input;
       const units = splitSentences(rawText);
       const searchable = rawText.slice(0, 2000);
 
@@ -167,6 +172,15 @@ export function createMockSummarizer(): Summarizer {
       const cleaned = candidates
         .map((unit, index) => ({ text: cleanTitle(unit), score: scoreUnit(unit, index) }))
         .filter((item) => item.text.length > 0);
+
+      // 本次关注点直接参与打分：本地摘要器没有语义理解能力，
+      // 让它"看见"用户在意什么，是最实际的加权方式。
+      if (keywords.length > 0) {
+        for (const item of cleaned) {
+          const matched = keywords.filter((keyword) => item.text.includes(keyword)).length;
+          item.score += matched * KEYWORD_BOOST;
+        }
+      }
 
       const title = truncate(cleaned[0]?.text ?? '', MAX_TITLE_LENGTH);
 

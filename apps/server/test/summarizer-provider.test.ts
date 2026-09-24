@@ -21,7 +21,7 @@ describe('summarizer provider', () => {
     let settings = makeSettings();
     const provider = createSummarizerProvider(() => settings);
 
-    const result = await provider.get().summarize('请于3月8日前提交报名表，联系人张老师。');
+    const result = await provider.get().summarize({ rawText: '请于3月8日前提交报名表，联系人张老师。', keywords: [] });
     assert.equal(result.provider, 'mock');
   });
 
@@ -30,14 +30,14 @@ describe('summarizer provider', () => {
     const counter = { calls: 0 };
     const provider = createSummarizerProvider(() => settings, { fetchImpl: okFetch(counter) });
 
-    const before = await provider.get().summarize('随便一段通知');
+    const before = await provider.get().summarize({ rawText: '随便一段通知', keywords: [] });
     assert.equal(before.provider, 'mock');
     assert.equal(counter.calls, 0);
 
     // 模拟用户在界面上保存了 Key
     settings = makeSettings({ apiKey: 'sk-just-saved-123456' });
 
-    const after = await provider.get().summarize('随便一段通知');
+    const after = await provider.get().summarize({ rawText: '随便一段通知', keywords: [] });
     assert.equal(after.provider, 'deepseek');
     assert.equal(counter.calls, 1);
   });
@@ -91,7 +91,7 @@ describe('summarizer provider', () => {
       },
     );
 
-    await provider.get().summarize('通知内容');
+    await provider.get().summarize({ rawText: '通知内容', keywords: [] });
     assert.equal(calledUrl, 'https://proxy.example.com/v1/chat/completions');
   });
 });

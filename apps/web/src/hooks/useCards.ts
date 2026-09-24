@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { MAX_RAW_TEXT_LENGTH } from '@notification-hub/shared';
+import { MAX_KEYWORDS, MAX_RAW_TEXT_LENGTH } from '@notification-hub/shared';
 import { ApiError, type CardApi } from '../lib/api';
 import type { CardView } from '../lib/card-view';
 
@@ -10,7 +10,8 @@ export interface UseCardsResult {
   /** 最近一次失败的中文提示，null 表示无错误 */
   error: string | null;
   dismissError: () => void;
-  submit: (rawText: string) => Promise<boolean>;
+  /** keywords 是一次性的本次关注点，不进入任何长期配置 */
+  submit: (rawText: string, keywords?: string[]) => Promise<boolean>;
   remove: (id: string) => Promise<void>;
 }
 
@@ -50,7 +51,7 @@ export function useCards(api: CardApi): UseCardsResult {
   const dismissError = useCallback(() => setError(null), []);
 
   const submit = useCallback(
-    async (rawText: string) => {
+    async (rawText: string, keywords: string[] = []) => {
       const trimmed = rawText.trim();
       if (trimmed.length === 0) {
         setError('请先粘贴通知内容');
@@ -60,11 +61,15 @@ export function useCards(api: CardApi): UseCardsResult {
         setError(`内容过长（${trimmed.length} 字符），上限 ${MAX_RAW_TEXT_LENGTH} 字符`);
         return false;
       }
+      if (keywords.length > MAX_KEYWORDS) {
+        setError(`关注点最多 ${MAX_KEYWORDS} 个，当前 ${keywords.length} 个`);
+        return false;
+      }
 
       setSubmitting(true);
       setError(null);
       try {
-        const card = await api.createCard(trimmed);
+        const card = await api.createCard(trimmed, keywords);
         // 新卡插到最前，与列表接口的倒序排列保持一致
         setCards((previous) => [card, ...previous]);
         return true;

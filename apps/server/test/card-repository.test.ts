@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { after, describe, it } from 'node:test';
 import type { InfoCard } from '@notification-hub/shared';
 import {
@@ -17,6 +18,7 @@ function makeCard(overrides: Partial<InfoCard> = {}): InfoCard {
     source: '教务处',
     keyPoints: ['要点一', '要点二'],
     rawText: '通知原文',
+    keywords: { priority: [], hit: [], missed: [] },
     provider: 'mock',
     createdAt: new Date().toISOString(),
     ...overrides,
@@ -144,6 +146,65 @@ describe('sqlite 仓储', () => {
       assert.equal(second.count(), 1);
     } finally {
       second.close();
+    }
+  });
+
+  it('关键词记录能被完整保存与读回', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      const card = makeCard({
+        keywords: { priority: ['面试', '报销'], hit: ['面试'], missed: ['报销'] },
+      });
+      repo.insert(card);
+      assert.deepEqual(repo.get(card.id)?.keywords, {
+        priority: ['面试', '报销'],
+        hit: ['面试'],
+        missed: ['报销'],
+      });
+    } finally {
+      repo.close();
+    }
+  });
+
+  it('没有关键词的卡片读回空记录而不是 undefined', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      const card = makeCard();
+      repo.insert(card);
+      assert.deepEqual(repo.get(card.id)?.keywords, { priority: [], hit: [], missed: [] });
+    } finally {
+      repo.close();
+    }
+  });
+
+  it('老数据库缺少 keywords 列时自动补列，已有数据不丢', () => {
+    const dbPath = tempDbPath();
+    // 模拟升级前的库：没有 keywords 列。DatabaseSync 不会自动建目录，先建好
+    mkdirSync(path.dirname(dbPath), { recursive: true });
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE cards (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, time TEXT, source TEXT,
+        key_points TEXT NOT NULL, raw_text TEXT NOT NULL,
+        provider TEXT NOT NULL, created_at TEXT NOT NULL, seq INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    legacy
+      .prepare(
+        `INSERT INTO cards (id, title, key_points, raw_text, provider, created_at, seq)
+         VALUES ('legacy-id', '老卡片', '["旧要点"]', '旧原文', 'mock', '2025-01-01T00:00:00.000Z', 1)`,
+      )
+      .run();
+    legacy.close();
+
+    const repo = createSqliteCardRepository(dbPath);
+    try {
+      const card = repo.get('legacy-id');
+      assert.equal(card?.title, '老卡片', '迁移后老数据必须还在');
+      assert.deepEqual(card?.keyPoints, ['旧要点']);
+      assert.deepEqual(card?.keywords, { priority: [], hit: [], missed: [] });
+    } finally {
+      repo.close();
     }
   });
 

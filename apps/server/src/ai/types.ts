@@ -16,9 +16,20 @@ export interface SummaryResult {
   provider: SummaryProvider;
 }
 
+/** 摘要器的输入 */
+export interface SummarizeInput {
+  /** 通知原文 */
+  rawText: string;
+  /**
+   * 本次生成要重点关注的词。空数组表示没有特别关注点。
+   * 模型只需要"优先覆盖"，漏掉的部分由 keyword-check 的确定性兜底负责。
+   */
+  keywords: string[];
+}
+
 /** 摘要器：把通知原文提炼成信息卡草稿 */
 export interface Summarizer {
-  summarize(rawText: string): Promise<SummaryResult>;
+  summarize(input: SummarizeInput): Promise<SummaryResult>;
   /**
    * 可选：验证凭据是否可用。
    * 只有真实模型摘要器才实现它；本地启发式摘要器无需验证。

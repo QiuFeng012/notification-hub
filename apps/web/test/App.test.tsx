@@ -14,6 +14,7 @@ function makeCard(overrides: Partial<CardView> = {}): CardView {
     source: '教务处',
     keyPoints: ['3月5日14:00开放选课', '3月8日24:00前完成'],
     rawText: '【教务处】选课通知原文',
+    keywords: { priority: [], hit: [], missed: [] },
     provider: 'deepseek',
     createdAt: '2025-03-05T06:32:00.000Z',
     createdAtLabel: '2025-03-05 14:32',
@@ -34,7 +35,7 @@ function makeSettings(overrides: Partial<SettingsView> = {}): SettingsView {
 
 interface FakeApiOptions {
   initial?: CardView[];
-  createImpl?: (rawText: string) => Promise<CardView>;
+  createImpl?: (rawText: string, keywords?: string[]) => Promise<CardView>;
   deleteImpl?: (id: string) => Promise<void>;
 }
 
@@ -102,7 +103,7 @@ describe('生成信息卡', () => {
 
     expect(await screen.findByText('新生成的卡片')).toBeInTheDocument();
     expect(textarea).toHaveValue('');
-    expect(api.createCard).toHaveBeenCalledWith('【教务处】选课通知');
+    expect(api.createCard).toHaveBeenCalledWith('【教务处】选课通知', []);
 
     const titles = screen.getAllByTestId('info-card').map((card) => card.querySelector('.card__title')?.textContent);
     expect(titles[0]).toBe('新生成的卡片');
@@ -471,5 +472,161 @@ describe('API 设置', () => {
 
     const toggle = await screen.findByRole('button', { name: /API 设置/ });
     expect(toggle).toHaveTextContent('已配置（来自环境变量）');
+  });
+});
+
+describe('本次关注点', () => {
+  it('输入关键词后显示为标签，并随提交一起发送', async () => {
+    const api = createFakeApi();
+    renderApp(api);
+
+    await userEvent.type(screen.getByLabelText(/本次关注点/), '面试,报销');
+    // 标签与输入框内容会同时出现，这里断言标签个数
+    expect(document.querySelectorAll('.keyword-pill')).toHaveLength(2);
+
+    await userEvent.type(screen.getByLabelText('通知原文'), '一条通知');
+    await userEvent.click(screen.getByRole('button', { name: '生成信息卡' }));
+
+    await waitFor(() =>
+      expect(api.createCard).toHaveBeenCalledWith('一条通知', ['面试', '报销']),
+    );
+  });
+
+  it('顿号与空格也能分隔，且去重', async () => {
+    const api = createFakeApi();
+    renderApp(api);
+
+    await userEvent.type(screen.getByLabelText(/本次关注点/), '面试、报销，面试');
+    expect(document.querySelectorAll('.keyword-pill')).toHaveLength(2);
+    expect(screen.getByText('面试')).toBeInTheDocument();
+    expect(screen.getByText('报销')).toBeInTheDocument();
+  });
+
+  it('提交成功后关键词输入被清空（一次性，不残留到下一次）', async () => {
+    const api = createFakeApi();
+    renderApp(api);
+
+    const keywordInput = screen.getByLabelText(/本次关注点/);
+    await userEvent.type(keywordInput, '面试');
+    await userEvent.type(screen.getByLabelText('通知原文'), '一条通知');
+    await userEvent.click(screen.getByRole('button', { name: '生成信息卡' }));
+
+    await waitFor(() => expect(keywordInput).toHaveValue(''));
+    expect(document.querySelectorAll('.keyword-pill')).toHaveLength(0);
+  });
+
+  it('提交失败时保留关键词，方便重试', async () => {
+    const api = createFakeApi({
+      createImpl: async () => {
+        throw new ApiError('SUMMARY_FAILED', '模型炸了', 502);
+      },
+    });
+    renderApp(api);
+
+    const keywordInput = screen.getByLabelText(/本次关注点/);
+    await userEvent.type(keywordInput, '面试');
+    await userEvent.type(screen.getByLabelText('通知原文'), '一条通知');
+    await userEvent.click(screen.getByRole('button', { name: '生成信息卡' }));
+
+    await screen.findByRole('alert');
+    expect(keywordInput).toHaveValue('面试');
+  });
+
+  it('超过上限时阻止提交并提示', async () => {
+    const api = createFakeApi();
+    renderApp(api);
+
+    const many = Array.from({ length: 21 }, (_, index) => `词${index}`).join(',');
+    await userEvent.type(screen.getByLabelText(/本次关注点/), many);
+
+    expect(screen.getByText(/最多 20 个/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText('通知原文'), '一条通知');
+    expect(screen.getByRole('button', { name: '生成信息卡' })).toBeDisabled();
+    expect(api.createCard).not.toHaveBeenCalled();
+  });
+
+  it('不填关注点时不会把空数组之外的字段塞给接口', async () => {
+    const api = createFakeApi();
+    renderApp(api);
+
+    await userEvent.type(screen.getByLabelText('通知原文'), '一条通知');
+    await userEvent.click(screen.getByRole('button', { name: '生成信息卡' }));
+
+    await waitFor(() => expect(api.createCard).toHaveBeenCalledWith('一条通知', []));
+  });
+});
+
+describe('卡片上的关注点标注', () => {
+  const keywordCard = makeCard({
+    keyPoints: ['3月5日14:00开放选课', '请于3月8日24:00前完成报销材料提交'],
+    keywords: { priority: ['报销', '面试'], hit: ['报销'], missed: [] },
+  });
+
+  it('命中的关键词在要点里高亮', async () => {
+    renderApp(createFakeApi({ initial: [keywordCard] }));
+    await screen.findByText('选课开放通知');
+
+    const marks = document.querySelectorAll('mark.keyword-mark');
+    expect(marks).toHaveLength(1);
+    expect(marks[0]?.textContent).toBe('报销');
+  });
+
+  it('卡头显示"含你关注的"', async () => {
+    renderApp(createFakeApi({ initial: [keywordCard] }));
+
+    const chip = await screen.findByTestId('keyword-hit');
+    expect(chip).toHaveTextContent('含你关注的：报销');
+  });
+
+  it('展示本次关注点全量，并说明哪些是系统补入的', async () => {
+    renderApp(
+      createFakeApi({
+        initial: [
+          makeCard({
+            keyPoints: ['（关注点）报销材料请交到财务处'],
+            keywords: { priority: ['报销', '面试'], hit: [], missed: ['报销'] },
+          }),
+        ],
+      }),
+    );
+
+    await screen.findByText('选课开放通知');
+    // 用卡片内的专属类名定位，避免误匹配表单上的「本次关注点」标签
+    const line = document.querySelector('.card__keywords');
+    expect(line).not.toBeNull();
+    expect(line?.textContent).toContain('报销');
+    expect(line?.textContent).toContain('面试');
+    expect(line?.textContent).toContain('由系统从原文补入');
+  });
+
+  it('没有关注点的卡片不显示相关标注', async () => {
+    renderApp(createFakeApi({ initial: [makeCard()] }));
+    await screen.findByText('选课开放通知');
+
+    expect(document.querySelector('.card__keywords')).toBeNull();
+    expect(screen.queryByTestId('keyword-hit')).not.toBeInTheDocument();
+    expect(document.querySelectorAll('mark.keyword-mark')).toHaveLength(0);
+  });
+
+  it('没有任何命中的卡片不显示命中标签，但仍显示关注点', async () => {
+    renderApp(
+      createFakeApi({
+        initial: [makeCard({ keywords: { priority: ['报销'], hit: [], missed: [] } })],
+      }),
+    );
+
+    await screen.findByText('选课开放通知');
+    expect(document.querySelector('.card__keywords')).not.toBeNull();
+    expect(screen.queryByTestId('keyword-hit')).not.toBeInTheDocument();
+  });
+
+  it('服务端返回的关键词字段损坏时不崩，也不产生虚假高亮', async () => {
+    // 直接把 keywords 塞成非法值，模拟老数据或异常响应
+    const broken = { ...makeCard(), keywords: 'not-an-object' };
+    renderApp(createFakeApi({ initial: [broken as unknown as CardView] }));
+
+    await screen.findByText('选课开放通知');
+    expect(document.querySelector('.card__keywords')).toBeNull();
+    expect(document.querySelectorAll('mark.keyword-mark')).toHaveLength(0);
   });
 });

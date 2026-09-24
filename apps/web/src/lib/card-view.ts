@@ -1,4 +1,4 @@
-import type { InfoCard } from '@notification-hub/shared';
+import type { CardKeywords, InfoCard } from '@notification-hub/shared';
 
 /** 信息卡在界面上的形态：时间与要点列表已归一化，时间戳已格式化为可读中文 */
 export interface CardView {
@@ -10,6 +10,8 @@ export interface CardView {
   source: string | null;
   keyPoints: string[];
   rawText: string;
+  /** 生成时的关注点记录，用于在卡片上标出"含你关注的" */
+  keywords: CardKeywords;
   provider: InfoCard['provider'];
   /** 入库时间原始 ISO 字符串，供相对时间计算使用 */
   createdAt: string;
@@ -40,9 +42,22 @@ export function toCardView(input: unknown): CardView | null {
     source: nonEmptyString(card.source),
     keyPoints,
     rawText: typeof card.rawText === 'string' ? card.rawText : '',
+    keywords: toKeywords(card.keywords),
     provider: card.provider === 'deepseek' ? 'deepseek' : 'mock',
     createdAt: typeof card.createdAt === 'string' ? card.createdAt : '',
     createdAtLabel: formatTimestamp(card.createdAt),
+  };
+}
+
+/** 关键词记录的归一化：缺失或损坏都退回空记录（老卡片没有这个字段） */
+function toKeywords(input: unknown): CardKeywords {
+  const record = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>;
+  const toList = (value: unknown): string[] =>
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.length > 0) : [];
+  return {
+    priority: toList(record.priority),
+    hit: toList(record.hit),
+    missed: toList(record.missed),
   };
 }
 

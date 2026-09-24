@@ -13,7 +13,7 @@ import type { Summarizer } from '../src/ai/types.js';
 
 /** 确定性摘要器：不需要联网，产出固定内容，便于断言接口行为 */
 const stubSummarizer: Summarizer = {
-  summarize(rawText: string) {
+  summarize() {
     return Promise.resolve({
       draft: {
         title: '选课开放通知',
@@ -72,6 +72,14 @@ async function makeApp(summarizer: Summarizer = stubSummarizer, envApiKey: strin
 
 async function createCard(app: Awaited<ReturnType<typeof makeApp>>['app'], rawText: string) {
   return app.inject({ method: 'POST', url: '/api/cards', payload: { rawText } });
+}
+
+async function createCardWithKeywords(
+  app: Awaited<ReturnType<typeof makeApp>>['app'],
+  rawText: string,
+  keywords: unknown,
+) {
+  return app.inject({ method: 'POST', url: '/api/cards', payload: { rawText, keywords } });
 }
 
 describe('GET /api/health', () => {
@@ -265,6 +273,64 @@ describe('createCardService 参数校验', () => {
       () => service.createCard({ rawText: null }),
       (error: unknown) => error instanceof ValidationError && error.code === 'INVALID_BODY',
     );
+  });
+});
+
+describe('POST /api/cards 的关注点', () => {
+  it('不传 keywords 时记录为空', async () => {
+    const { app } = await makeApp();
+    const card = (await createCard(app, '【教务处】选课通知。')).json();
+    assert.deepEqual(card.keywords, { priority: [], hit: [], missed: [] });
+    await app.close();
+  });
+
+  it('keywords 会归一化后记录在卡片上', async () => {
+    const { app } = await makeApp();
+    const card = (await createCardWithKeywords(app, '【教务处】选课通知。', ' 面试 ，报销, 面试 ')).json();
+
+    assert.deepEqual(card.keywords.priority, ['面试', '报销']);
+    await app.close();
+  });
+
+  it('模型漏掉原文提到的关注点时，由服务端补入证据要点', async () => {
+    const { app } = await makeApp();
+    const rawText = '会议时间改到周五。报销材料请交到财务处。';
+    // stub 摘要器只会产出固定的两条要点，都不含"报销"
+    const card = (await createCardWithKeywords(app, rawText, ['报销'])).json();
+
+    assert.deepEqual(card.keywords.missed, ['报销']);
+    assert.ok(
+      card.keyPoints.some((point: string) => point.includes('报销材料请交到财务处')),
+      `兜底要点应包含原文证据句，实际：${JSON.stringify(card.keyPoints)}`,
+    );
+    await app.close();
+  });
+
+  it('要点已覆盖关注点时不会重复补入', async () => {
+    const { app } = await makeApp();
+    const card = (await createCardWithKeywords(app, '3月8日24:00前完成。', ['3月8日'])).json();
+
+    assert.deepEqual(card.keywords.hit, ['3月8日']);
+    assert.deepEqual(card.keywords.missed, []);
+    await app.close();
+  });
+
+  it('keywords 传非法类型时不报错，按没有关注点处理', async () => {
+    const { app } = await makeApp();
+    const response = await createCardWithKeywords(app, '【教务处】选课通知。', 12345);
+    assert.equal(response.statusCode, 201);
+    assert.deepEqual(response.json().keywords, { priority: [], hit: [], missed: [] });
+    await app.close();
+  });
+
+  it('关注点随卡片一起持久化，列表里也能读到', async () => {
+    const { app } = await makeApp();
+    await createCardWithKeywords(app, '关于报销的通知。', ['报销']);
+
+    const list = (await app.inject({ method: 'GET', url: '/api/cards' })).json();
+    assert.deepEqual(list.cards[0].keywords.priority, ['报销']);
+    assert.ok(Array.isArray(list.cards[0].keywords.hit));
+    await app.close();
   });
 });
 

@@ -66,7 +66,7 @@ async function requestJson(path: string, init?: RequestInit & { json?: unknown }
 
 export interface CardApi {
   listCards(): Promise<CardView[]>;
-  createCard(rawText: string): Promise<CardView>;
+  createCard(rawText: string, keywords?: string[]): Promise<CardView>;
   deleteCard(id: string): Promise<void>;
 }
 
@@ -80,10 +80,10 @@ export function createCardApi(): CardApi {
         .filter((card): card is CardView => card !== null);
     },
 
-    async createCard(rawText: string) {
+    async createCard(rawText: string, keywords: string[] = []) {
       const payload = (await requestJson('/api/cards', {
         method: 'POST',
-        json: { rawText },
+        json: keywords.length > 0 ? { rawText, keywords } : { rawText },
       })) as InfoCard;
 
       const view = toCardView(payload);

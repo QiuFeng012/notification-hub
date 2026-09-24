@@ -46,6 +46,24 @@ interface ChatCompletionResponse {
 const VALIDATION_USER_MESSAGE = '在吗';
 
 /**
+ * 用户当次关注点。附在 user 消息而不是 system 提示里：
+ * system 部分保持不变，才能吃到 DeepSeek 的上下文缓存。
+ */
+export function buildKeywordSection(keywords: string[]): string {
+  if (keywords.length === 0) return '';
+  return [
+    '',
+    '---',
+    `用户本次特别关注以下内容：${keywords.join('、')}`,
+    '请在 key_points 中优先覆盖与这些关注点相关的信息。',
+    '原文明确提到某个关注点时，至少有一条要点必须覆盖它；不要因为你觉得次要就省略。',
+    '原文没有提到的关注点无需提及，也不要为了凑数而推测或编造。',
+    '',
+    '通知原文：',
+  ].join('\n');
+}
+
+/**
  * 真实 AI 摘要器：调用 DeepSeek 的 OpenAI 兼容接口。
  *
  * 开启 response_format=json_object 让模型只吐 JSON；即便如此解析层仍做兜底，
@@ -108,8 +126,11 @@ export function createDeepSeekSummarizer(options: DeepSeekSummarizerOptions): Su
   }
 
   return {
-    async summarize(rawText: string) {
-      const content = await callModel(rawText, null);
+    async summarize(input) {
+      const { rawText, keywords } = input;
+      const userContent =
+        keywords.length > 0 ? `${buildKeywordSection(keywords)}${rawText}` : rawText;
+      const content = await callModel(userContent, null);
       return { draft: parseSummaryResponse(content, rawText), provider: 'deepseek' as const };
     },
 

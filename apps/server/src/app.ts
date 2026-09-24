@@ -93,8 +93,11 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   app.get('/api/cards', async () => options.cardService.listCards());
 
   app.post('/api/cards', async (request, reply) => {
-    const body = (request.body ?? {}) as { rawText?: unknown };
-    const card = await options.cardService.createCard({ rawText: body.rawText });
+    const body = (request.body ?? {}) as { rawText?: unknown; keywords?: unknown };
+    const card = await options.cardService.createCard({
+      rawText: body.rawText,
+      keywords: body.keywords,
+    });
     return reply.code(201).send(card);
   });
 

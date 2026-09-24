@@ -1,8 +1,14 @@
 import { randomUUID } from 'node:crypto';
-import { MAX_RAW_TEXT_LENGTH, type InfoCard } from '@notification-hub/shared';
+import {
+  MAX_RAW_TEXT_LENGTH,
+  normalizeKeywords,
+  type CardKeywords,
+  type InfoCard,
+} from '@notification-hub/shared';
 import type { Summarizer } from '../ai/types.js';
 import type { SummarizerProvider } from '../ai/provider.js';
 import type { CardRepository } from '../db/repository.js';
+import { enforceKeywords } from '../keywords/keyword-check.js';
 
 /** 业务规则被违反时抛出，由 HTTP 层映射成 4xx */
 export class ValidationError extends Error {
@@ -17,6 +23,8 @@ export class ValidationError extends Error {
 
 export interface CreateCardInput {
   rawText: unknown;
+  /** 本次要重点关注的词；未传或非法时按"没有关注点"处理 */
+  keywords?: unknown;
 }
 
 export interface CardService {
@@ -63,15 +71,24 @@ export function createCardService(repo: CardRepository, source: SummarizerSource
   return {
     async createCard(input) {
       const rawText = normalizeRawText(input.rawText);
-      const { draft, provider } = await resolveSummarizer().summarize(rawText);
+      // 关键词是前端传来的自由输入，归一化后最多 MAX_KEYWORDS 个
+      const priority = normalizeKeywords(input.keywords);
+
+      const { draft, provider } = await resolveSummarizer().summarize({ rawText, keywords: priority });
+
+      // 确定性兜底：模型有可能漏掉用户明确关心的信息，这里逐词核对并补入证据句
+      const checked = enforceKeywords(rawText, draft.keyPoints, priority);
+
+      const keywords: CardKeywords = checked.keywords;
 
       const card: InfoCard = {
         id: randomUUID(),
         title: draft.title,
         time: draft.time,
         source: draft.source,
-        keyPoints: draft.keyPoints,
+        keyPoints: checked.keyPoints,
         rawText,
+        keywords,
         provider,
         createdAt: new Date().toISOString(),
       };
