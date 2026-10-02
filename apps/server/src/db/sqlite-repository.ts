@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { CardKeywords, CardSchedule, InfoCard, SummaryProvider } from '@notification-hub/shared';
+import type { CardKeywords, CardRevision, CardSchedule, InfoCard, SummaryProvider } from '@notification-hub/shared';
 import { DEFAULT_LIST_LIMIT, type CardRepository } from './repository.js';
 import { parseSchedule } from '../calendar/date-parser.js';
 
@@ -16,19 +16,36 @@ import { parseSchedule } from '../calendar/date-parser.js';
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS cards (
-  id          TEXT PRIMARY KEY,
-  title       TEXT NOT NULL,
-  time        TEXT,
-  source      TEXT,
-  key_points  TEXT NOT NULL,
-  raw_text    TEXT NOT NULL,
-  provider    TEXT NOT NULL,
-  created_at  TEXT NOT NULL,
-  seq         INTEGER NOT NULL DEFAULT 0,
-  keywords    TEXT NOT NULL DEFAULT '{}',
-  schedule    TEXT
+  id             TEXT PRIMARY KEY,
+  title          TEXT NOT NULL,
+  time           TEXT,
+  source         TEXT,
+  key_points     TEXT NOT NULL,
+  raw_text       TEXT NOT NULL,
+  provider       TEXT NOT NULL,
+  created_at     TEXT NOT NULL,
+  seq            INTEGER NOT NULL DEFAULT 0,
+  keywords       TEXT NOT NULL DEFAULT '{}',
+  schedule       TEXT,
+  updated_at     TEXT,
+  revision_count INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_cards_order ON cards (created_at DESC, seq DESC);
+
+-- 改动历史。存的是"改动前"的内容，所以读出来就是：
+-- 因为 reason，把 previous_* 改成了现在这样。
+CREATE TABLE IF NOT EXISTS card_revisions (
+  id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+  card_id               TEXT NOT NULL,
+  reason                TEXT NOT NULL,
+  note                  TEXT,
+  previous_title        TEXT NOT NULL,
+  previous_time         TEXT,
+  previous_source       TEXT,
+  previous_key_points   TEXT NOT NULL,
+  created_at            TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_revisions_card ON card_revisions (card_id, id DESC);
 `;
 
 /** 数据库里的一行；key_points / keywords / schedule 以 JSON 字符串存储 */
@@ -43,6 +60,20 @@ interface CardRow {
   created_at: string;
   keywords?: string | null;
   schedule?: string | null;
+  updated_at?: string | null;
+  revision_count?: number | null;
+}
+
+interface RevisionRow {
+  id: number;
+  card_id: string;
+  reason: string;
+  note: string | null;
+  previous_title: string;
+  previous_time: string | null;
+  previous_source: string | null;
+  previous_key_points: string;
+  created_at: string;
 }
 
 const EMPTY_KEYWORDS: CardKeywords = { priority: [], hit: [], missed: [] };
@@ -113,6 +144,27 @@ function rowToCard(row: CardRow): InfoCard {
     keywords: parseKeywords(row.keywords),
     provider: toProvider(row.provider),
     createdAt: row.created_at,
+    updatedAt: row.updated_at ?? null,
+    revisionCount: Number(row.revision_count ?? 0),
+  };
+}
+
+/** 解析历史行的 reason，非法值归到 other，不让坏数据把界面搞崩 */
+function toRevisionReason(value: string): CardRevision['reason'] {
+  return value === 'official' || value === 'manual' ? value : 'other';
+}
+
+function rowToRevision(row: RevisionRow): CardRevision {
+  return {
+    id: Number(row.id),
+    cardId: row.card_id,
+    reason: toRevisionReason(row.reason),
+    note: row.note,
+    previousTitle: row.previous_title,
+    previousTime: row.previous_time,
+    previousSource: row.previous_source,
+    previousKeyPoints: parseKeyPoints(row.previous_key_points),
+    createdAt: row.created_at,
   };
 }
 
@@ -141,6 +193,13 @@ function migrate(db: DatabaseSync): void {
     db.exec(`ALTER TABLE cards ADD COLUMN schedule_computed INTEGER NOT NULL DEFAULT 0`);
     db.exec(`UPDATE cards SET schedule_computed = 1 WHERE schedule IS NOT NULL`);
   }
+  if (!has('updated_at')) {
+    // 从未编辑过就是 NULL，界面据此判断要不要显示"已修改"标记
+    db.exec(`ALTER TABLE cards ADD COLUMN updated_at TEXT`);
+  }
+  if (!has('revision_count')) {
+    db.exec(`ALTER TABLE cards ADD COLUMN revision_count INTEGER NOT NULL DEFAULT 0`);
+  }
 }
 
 /**
@@ -165,6 +224,22 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
   );
   const deleteStmt = db.prepare(`DELETE FROM cards WHERE id = ?`);
+  const updateStmt = db.prepare(
+    `UPDATE cards
+        SET title = ?, time = ?, source = ?, key_points = ?, schedule = ?,
+            schedule_computed = 1, updated_at = ?, revision_count = revision_count + 1
+      WHERE id = ?`,
+  );
+  const insertRevisionStmt = db.prepare(
+    `INSERT INTO card_revisions
+       (card_id, reason, note, previous_title, previous_time, previous_source, previous_key_points, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  const listRevisionsStmt = db.prepare(
+    `SELECT * FROM card_revisions WHERE card_id = ? ORDER BY id DESC`,
+  );
+  const deleteRevisionsStmt = db.prepare(`DELETE FROM card_revisions WHERE card_id = ?`);
+  const resetRevisionCountStmt = db.prepare(`UPDATE cards SET revision_count = 0 WHERE id = ?`);
 
   /**
    * 回填历史卡片的排期。
@@ -230,7 +305,68 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
       return card;
     },
 
+    update(id, patch, reason, note) {
+      const existing = this.get(id);
+      if (!existing) return null;
+
+      const nextTitle = patch.title ?? existing.title;
+      const nextTime = patch.time !== undefined ? patch.time : existing.time;
+      const nextSource = patch.source !== undefined ? patch.source : existing.source;
+      const nextKeyPoints = patch.keyPoints ?? existing.keyPoints;
+
+      // 时间变了就重算排期。锚点仍用卡片创建时间：
+      // 相对日期（"明天"）指的是通知到达那天，不是改动的这天。
+      const anchor = new Date(existing.createdAt);
+      const nextSchedule = parseSchedule(nextTime, {
+        anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,
+      });
+
+      const now = new Date().toISOString();
+
+      // 先存旧值再改：这样历史里存的是"改动前"，读出来就是"从什么改成了什么"
+      insertRevisionStmt.run(
+        id,
+        reason,
+        note,
+        existing.title,
+        existing.time,
+        existing.source,
+        JSON.stringify(existing.keyPoints),
+        now,
+      );
+
+      updateStmt.run(
+        nextTitle,
+        nextTime,
+        nextSource,
+        JSON.stringify(nextKeyPoints),
+        nextSchedule ? JSON.stringify(nextSchedule) : null,
+        now,
+        id,
+      );
+
+      return this.get(id);
+    },
+
+    listRevisions(cardId) {
+      const rows = listRevisionsStmt.all(cardId) as unknown as RevisionRow[];
+      return rows.map(rowToRevision);
+    },
+
+    clearRevisions(cardId) {
+      const existing = this.get(cardId);
+      if (!existing) return 0;
+      const removed = existing.revisionCount;
+      deleteRevisionsStmt.run(cardId);
+      // 历史没了，计数也该归零；updatedAt 保留，它记录的是"内容最后一次被改的时间"
+      resetRevisionCountStmt.run(cardId);
+      return removed;
+    },
+
     delete(id) {
+      // 先删历史再删卡片：SQLite 默认不开外键级联，
+      // 留着孤儿历史既占空间，也可能在 id 复用时被误读成"这张卡改过"。
+      deleteRevisionsStmt.run(id);
       const result = deleteStmt.run(id);
       return Number(result.changes) > 0;
     },
@@ -245,7 +381,9 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
 export function createMemoryCardRepository(): CardRepository {
   const cards = new Map<string, InfoCard>();
   const seqs = new Map<string, number>();
+  const revisions = new Map<string, CardRevision[]>();
   let nextSeq = 1;
+  let nextRevisionId = 1;
 
   /** 与 sqlite 版一致的两级排序：先比创建时间，再比插入序号 */
   const ordered = () =>
@@ -271,13 +409,64 @@ export function createMemoryCardRepository(): CardRepository {
       nextSeq += 1;
       return card;
     },
+    update(id, patch, reason, note) {
+      const existing = cards.get(id);
+      if (!existing) return null;
+
+      const now = new Date().toISOString();
+      const history = revisions.get(id) ?? [];
+      history.unshift({
+        id: nextRevisionId,
+        cardId: id,
+        reason,
+        note,
+        previousTitle: existing.title,
+        previousTime: existing.time,
+        previousSource: existing.source,
+        previousKeyPoints: [...existing.keyPoints],
+        createdAt: now,
+      });
+      nextRevisionId += 1;
+      revisions.set(id, history);
+
+      const nextTime = patch.time !== undefined ? patch.time : existing.time;
+      const anchor = new Date(existing.createdAt);
+
+      const updated: InfoCard = {
+        ...existing,
+        title: patch.title ?? existing.title,
+        time: nextTime,
+        source: patch.source !== undefined ? patch.source : existing.source,
+        keyPoints: patch.keyPoints ?? existing.keyPoints,
+        schedule: parseSchedule(nextTime, {
+          anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,
+        }),
+        updatedAt: now,
+        revisionCount: existing.revisionCount + 1,
+      };
+      cards.set(id, updated);
+      return updated;
+    },
+    listRevisions(cardId) {
+      return revisions.get(cardId) ?? [];
+    },
+    clearRevisions(cardId) {
+      const existing = cards.get(cardId);
+      if (!existing) return 0;
+      const removed = existing.revisionCount;
+      revisions.delete(cardId);
+      cards.set(cardId, { ...existing, revisionCount: 0 });
+      return removed;
+    },
     delete(id) {
       seqs.delete(id);
+      revisions.delete(id);
       return cards.delete(id);
     },
     close() {
       cards.clear();
       seqs.clear();
+      revisions.clear();
     },
   };
 }

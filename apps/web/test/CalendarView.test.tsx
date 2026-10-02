@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import {
   DEFAULT_HIGHLIGHT_STYLE,
+  type CardRevision,
   type CardSchedule,
   type HighlightStyle,
   type SettingsView,
@@ -34,6 +35,8 @@ function makeCard(overrides: Partial<CardView> = {}): CardView {
     provider: 'deepseek',
     createdAt: '2025-03-05T06:32:00.000Z',
     createdAtLabel: '2025-03-05 14:32',
+    updatedAt: null,
+    revisionCount: 0,
     ...overrides,
   };
 }
@@ -54,10 +57,22 @@ function makeSettings(overrides: Partial<SettingsView> = {}): SettingsView {
   };
 }
 
-function makeApis(cards: CardView[], settings: SettingsView = makeSettings()) {
+interface ApiOptions {
+  /** 让某些用例注入真实的历史数据；默认没有改动记录 */
+  revisions?: CardRevision[];
+}
+
+function makeApis(
+  cards: CardView[],
+  settings: SettingsView = makeSettings(),
+  options: ApiOptions = {},
+) {
   const cardApi: CardApi = {
     listCards: vi.fn(async () => cards),
     createCard: vi.fn(async () => makeCard()),
+    updateCard: vi.fn(async (id, patch) => makeCard({ id, ...patch })),
+    listRevisions: vi.fn(async () => options.revisions ?? []),
+    clearRevisions: vi.fn(async () => undefined),
     deleteCard: vi.fn(async () => undefined),
   };
   const settingsApi: SettingsApi = {
@@ -78,8 +93,12 @@ function makeApis(cards: CardView[], settings: SettingsView = makeSettings()) {
   return { cardApi, settingsApi };
 }
 
-async function openCalendar(cards: CardView[], settings?: SettingsView) {
-  const { cardApi, settingsApi } = makeApis(cards, settings);
+async function openCalendar(
+  cards: CardView[],
+  settings?: SettingsView,
+  options: ApiOptions = {},
+) {
+  const { cardApi, settingsApi } = makeApis(cards, settings, options);
   render(<App api={cardApi} settingsApi={settingsApi} today={TODAY} />);
   await userEvent.click(await screen.findByRole('tab', { name: '日历视图' }));
   return { cardApi, settingsApi };
@@ -363,7 +382,10 @@ describe('未排期与空态', () => {
     const cardApi: CardApi = {
       listCards: vi.fn(() => new Promise<CardView[]>(() => undefined)),
       createCard: vi.fn(async () => makeCard()),
-      deleteCard: vi.fn(async () => undefined),
+      updateCard: vi.fn(async (id, patch) => makeCard({ id, ...patch })),
+    listRevisions: vi.fn(async () => []),
+    clearRevisions: vi.fn(async () => undefined),
+    deleteCard: vi.fn(async () => undefined),
     };
     render(<App api={cardApi} settingsApi={makeApis([]).settingsApi} today={TODAY} />);
     await userEvent.click(await screen.findByRole('tab', { name: '日历视图' }));
@@ -451,6 +473,125 @@ describe('点日期看当天安排', () => {
 
     await userEvent.click(document.querySelector('[data-date="2025-03-06"]') as HTMLElement);
     expect(await screen.findByTestId('calendar-detail')).toHaveTextContent('年份为推断所得');
+  });
+});
+
+describe('在日历里修改事件', () => {
+  it('点日期后可以点"修改"打开编辑表单', async () => {
+    await openCalendar([makeCard({ title: '选课安排', schedule: schedule('2025-03-06') })]);
+    await screen.findByText('2025 年 3 月');
+
+    await userEvent.click(document.querySelector('[data-date="2025-03-06"]') as HTMLElement);
+    const detail = await screen.findByTestId('calendar-detail');
+    await userEvent.click(within(detail).getByRole('button', { name: '修改信息：选课安排' }));
+
+    const form = await screen.findByTestId('card-edit-form');
+    // 表单用卡片当前内容预填，便于在原文基础上订正
+    expect(within(form).getByLabelText('标题')).toHaveValue('选课安排');
+  });
+
+  it('保存改动后调用编辑接口并带上修改原因', async () => {
+    const card = makeCard({ id: 'card-x', title: '原标题', schedule: schedule('2025-03-06') });
+    const { cardApi } = await openCalendar([card]);
+    await screen.findByText('2025 年 3 月');
+
+    await userEvent.click(document.querySelector('[data-date="2025-03-06"]') as HTMLElement);
+    const detail = await screen.findByTestId('calendar-detail');
+    await userEvent.click(within(detail).getByRole('button', { name: '修改信息：原标题' }));
+
+    const form = await screen.findByTestId('card-edit-form');
+    await userEvent.clear(within(form).getByLabelText('标题'));
+    await userEvent.type(within(form).getByLabelText('标题'), '官方已改：新标题');
+    await userEvent.selectOptions(within(form).getByLabelText('修改原因（必填）'), 'official');
+    await userEvent.click(within(form).getByRole('button', { name: '保存修改' }));
+
+    await waitFor(() =>
+      expect(cardApi.updateCard).toHaveBeenCalledWith(
+        'card-x',
+        expect.objectContaining({ title: '官方已改：新标题', reason: 'official' }),
+      ),
+    );
+  });
+
+  it('取消编辑后回到详情，不提交', async () => {
+    const card = makeCard({ id: 'card-y', title: '待改安排', schedule: schedule('2025-03-06') });
+    const { cardApi } = await openCalendar([card]);
+    await screen.findByText('2025 年 3 月');
+
+    await userEvent.click(document.querySelector('[data-date="2025-03-06"]') as HTMLElement);
+    const detail = await screen.findByTestId('calendar-detail');
+    await userEvent.click(within(detail).getByRole('button', { name: '修改信息：待改安排' }));
+    await userEvent.click(await screen.findByRole('button', { name: '取消' }));
+
+    expect(screen.queryByTestId('card-edit-form')).not.toBeInTheDocument();
+    expect(cardApi.updateCard).not.toHaveBeenCalled();
+  });
+
+  it('已修改过的卡片显示标记，并可查看改动历史', async () => {
+    const card = makeCard({
+      id: 'card-z',
+      title: '改过的安排',
+      schedule: schedule('2025-03-06'),
+      revisionCount: 2,
+      updatedAt: '2025-03-06T08:00:00.000Z',
+    });
+    const { cardApi } = await openCalendar([card]);
+    await screen.findByText('2025 年 3 月');
+
+    await userEvent.click(document.querySelector('[data-date="2025-03-06"]') as HTMLElement);
+    const detail = await screen.findByTestId('calendar-detail');
+    expect(within(detail).getByTestId('detail-edited')).toHaveTextContent('已修改 2 次');
+
+    await userEvent.click(within(detail).getByRole('button', { name: '改动历史' }));
+    await waitFor(() => expect(cardApi.listRevisions).toHaveBeenCalledWith('card-z'));
+  });
+
+  it('可以清空改动历史', async () => {
+    const card = makeCard({
+      id: 'card-clear',
+      title: '要清理的安排',
+      schedule: schedule('2025-03-06'),
+      revisionCount: 1,
+      updatedAt: '2025-03-06T08:00:00.000Z',
+    });
+    const { cardApi } = await openCalendar([card], undefined, {
+      revisions: [
+        {
+          id: 1,
+          cardId: 'card-clear',
+          reason: 'official',
+          note: null,
+          previousTitle: '原标题',
+          previousTime: null,
+          previousSource: null,
+          previousKeyPoints: ['原要点'],
+          createdAt: '2025-03-06T08:00:00.000Z',
+        },
+      ],
+    });
+    await screen.findByText('2025 年 3 月');
+
+    await userEvent.click(document.querySelector('[data-date="2025-03-06"]') as HTMLElement);
+    const detail = await screen.findByTestId('calendar-detail');
+    await userEvent.click(within(detail).getByRole('button', { name: '改动历史' }));
+
+    const history = await screen.findByTestId('revision-history');
+    expect(history).toBeInTheDocument();
+    // 清空按钮在列表之外，所以从详情容器里找
+    await userEvent.click(within(detail).getByRole('button', { name: '清空改动历史' }));
+
+    await waitFor(() => expect(cardApi.clearRevisions).toHaveBeenCalledWith('card-clear'));
+    // 清空后按"还没被改过"呈现，而不是留一片空列表
+    expect(await screen.findByText('这条还没被改过。')).toBeInTheDocument();
+  });
+
+  it('没改过的卡片不显示历史入口', async () => {
+    await openCalendar([makeCard({ schedule: schedule('2025-03-06') })]);
+    await screen.findByText('2025 年 3 月');
+
+    await userEvent.click(document.querySelector('[data-date="2025-03-06"]') as HTMLElement);
+    const detail = await screen.findByTestId('calendar-detail');
+    expect(within(detail).queryByRole('button', { name: '改动历史' })).not.toBeInTheDocument();
   });
 });
 

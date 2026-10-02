@@ -105,6 +105,27 @@
 历史卡片会在服务启动时**自动回填排期**（用卡片自己的创建时间作锚点），
 所以你之前攒下的卡片不需要重新粘贴。
 
+## 修改信息卡（应对官方信息变更）
+
+通知经常改口径——截止时间推迟、地点变更。这时不需要重新粘贴一遍，
+在**日历视图点某天的安排 → 「修改」**，或在卡片列表里点「修改」，即可订正。
+
+可改的字段：标题 / 时间 / 来源 / 要点（逐条增删改）。
+
+三条刻意的设计：
+
+1. **修改原因必填**（官方通知更新 / 我手动更正 / 其他）。
+   没有它，日后看到这条与原文不一致时无法解释，也就无法判断该以哪个为准。
+2. **改了时间会重算排期**，日历上的位置随之移动；时间留空表示这条没有可排的日期，
+   会退出日历。重算的锚点仍是**卡片创建时间**，所以「明天」永远指通知到达那天，
+   而不是你改动的这天。
+3. **每次改动前存一份快照**，点「改动历史」可以看到：因为「官方通知更新」，
+   把原标题/原时间/原来源/原要点改成了现在这样。
+   在这个场景下，"原来写的是什么"往往和"现在是什么"一样重要。
+   历史可以一键清空（只清记录，不动内容）。
+
+卡片上会显示「已修改 N 次」标记，一眼看出这条不是 AI 的原始输出。
+
 ## 快速开始
 
 ```bash
@@ -203,14 +224,18 @@ scripts/              启动器与验证脚本
 | `GET` | `/api/health` | 健康检查 |
 | `GET` | `/api/cards` | 信息卡列表（按创建时间倒序） |
 | `POST` | `/api/cards` | 提交 `{ rawText, keywords? }`，生成并保存信息卡 |
+| `PATCH` | `/api/cards/:id` | 修改 `{ title?, time?, source?, keyPoints?, reason, note? }`；`reason` 必填 |
+| `GET` | `/api/cards/:id/revisions` | 改动历史（每条记录的是改动**前**的内容） |
+| `DELETE` | `/api/cards/:id/revisions` | 清空改动历史（只清记录，内容不动） |
 | `DELETE` | `/api/cards/:id` | 删除一张信息卡 |
 | `GET` | `/api/settings` | 当前 API 设置（**只返回 Key 掩码**） |
-| `PUT` | `/api/settings` | 保存 `{ apiKey?, baseUrl?, model? }`，保存前会真实验证 Key |
+| `PUT` | `/api/settings` | 保存 `{ apiKey?, baseUrl?, model?, highlight? }`，保存前会真实验证 Key |
 | `DELETE` | `/api/settings` | 清除已保存的设置，回落到环境变量或本地启发式摘要 |
 
 错误统一返回 `{ "error": { "code": "...", "message": "..." } }`，常见错误码：
 `EMPTY_TEXT`、`INVALID_BODY`、`TEXT_TOO_LONG`(413)、`INVALID_ID`、`CARD_NOT_FOUND`、`SUMMARY_FAILED`、
-`INVALID_API_KEY`、`VALUE_TOO_LONG`。
+`INVALID_API_KEY`、`VALUE_TOO_LONG`，以及修改相关的
+`INVALID_REASON`、`EMPTY_TITLE`、`EMPTY_KEY_POINTS`、`TOO_MANY_KEY_POINTS`、`NOTHING_TO_UPDATE`。
 
 ## 配置项
 

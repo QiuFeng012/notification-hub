@@ -26,7 +26,8 @@ export default function App({ api, settingsApi, today }: AppProps = {}) {
   const cardApi = useMemo(() => api ?? createCardApi(), [api]);
   const settingsClient = useMemo(() => settingsApi ?? createSettingsApi(), [settingsApi]);
 
-  const { cards, loading, submitting, error, dismissError, submit, remove } = useCards(cardApi);
+  const { cards, loading, submitting, error, dismissError, submit, edit, revisions, clearRevisions, remove } =
+    useCards(cardApi);
   const settings = useSettings(settingsClient);
   const [view, setView] = useState<ViewMode>('cards');
 
@@ -109,13 +110,23 @@ export default function App({ api, settingsApi, today }: AppProps = {}) {
           </div>
 
           {view === 'cards' ? (
-            <CardList cards={cards} loading={loading} onDelete={remove} />
+            <CardList
+              cards={cards}
+              loading={loading}
+              onEdit={async (id, patch) => (await edit(id, patch)) !== null}
+              onLoadRevisions={revisions}
+              onClearRevisions={clearRevisions}
+              onDelete={remove}
+            />
           ) : (
             <CalendarView
               cards={cards}
               loading={loading}
               highlight={highlight}
               onSaveHighlight={settings.save}
+              onEdit={async (id, patch) => (await edit(id, patch)) !== null}
+              onLoadRevisions={revisions}
+              onClearRevisions={clearRevisions}
               today={todayIso}
             />
           )}

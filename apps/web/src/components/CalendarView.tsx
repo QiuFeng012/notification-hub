@@ -1,5 +1,12 @@
 import { useMemo, useState } from 'react';
-import type { HighlightStyle, UpdateSettingsRequest } from '@notification-hub/shared';
+import type {
+  CardRevision,
+  HighlightStyle,
+  UpdateCardRequest,
+  UpdateSettingsRequest,
+} from '@notification-hub/shared';
+import { CardEditForm } from './CardEditForm';
+import { RevisionHistory } from './RevisionHistory';
 import { RgbColorPicker } from './RgbColorPicker';
 import type { CardView } from '../lib/card-view';
 import { readableTextColor } from '../lib/color';
@@ -38,6 +45,10 @@ interface CalendarViewProps {
   highlight: HighlightStyle;
   /** 保存颜色配置；perCard 传 null 表示取消对这张卡的单独指定 */
   onSaveHighlight: (patch: UpdateSettingsRequest) => Promise<boolean>;
+  /** 提交对某张卡片的修改；返回是否成功 */
+  onEdit: (id: string, patch: UpdateCardRequest) => Promise<boolean>;
+  onLoadRevisions: (id: string) => Promise<CardRevision[]>;
+  onClearRevisions: (id: string) => Promise<void>;
   /** 今天，格式 YYYY-MM-DD；注入是为了测试可确定 */
   today: string;
 }
@@ -60,7 +71,16 @@ function formatDateLabel(date: string): string {
  *   - 同一周里区间有重合就换到下一行，不重合的共用一行，避免行数虚增。
  *   - 本周没有任何事件就不画事件行。
  */
-export function CalendarView({ cards, loading, highlight, onSaveHighlight, today }: CalendarViewProps) {
+export function CalendarView({
+  cards,
+  loading,
+  highlight,
+  onSaveHighlight,
+  onEdit,
+  onLoadRevisions,
+  onClearRevisions,
+  today,
+}: CalendarViewProps) {
   const todayParts = splitIsoDate(today);
   const [cursor, setCursor] = useState(() => ({
     year: todayParts?.year ?? new Date().getFullYear(),
@@ -68,6 +88,10 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
   }));
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
+  /** 正在编辑详情的那张卡片（改标题/时间/要点） */
+  const [editingDetailsId, setEditingDetailsId] = useState<string | null>(null);
+  /** 正在看改动历史的那张卡片 */
+  const [historyCardId, setHistoryCardId] = useState<string | null>(null);
   const [showColorPanel, setShowColorPanel] = useState(false);
   /** 颜色面板里正在用色盘细调哪个颜色 */
   const [editingSlot, setEditingSlot] = useState<ColorSlot | null>(null);
@@ -380,6 +404,25 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
                 const isMulti = (card.schedule?.dayCount ?? 1) >= 2;
                 const isFirstDay = card.schedule?.start === selectedDate;
                 const isLastDay = card.schedule?.end === selectedDate;
+                const edited = card.revisionCount > 0;
+
+                // 正在改这张卡：整条换成编辑表单，避免"边看边改"时改错对象
+                if (editingDetailsId === card.id) {
+                  return (
+                    <li key={card.id} className="calendar__detail-item calendar__detail-item--editing">
+                      <CardEditForm
+                        card={card}
+                        onSubmit={async (patch) => {
+                          const ok = await onEdit(card.id, patch);
+                          if (ok) setEditingDetailsId(null);
+                          return ok;
+                        }}
+                        onCancel={() => setEditingDetailsId(null)}
+                      />
+                    </li>
+                  );
+                }
+
                 return (
                   <li key={card.id} className="calendar__detail-item">
                     <span
@@ -398,13 +441,45 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
                             {isLastDay && !isFirstDay ? '（结束）' : ''}
                           </span>
                         ) : null}
+                        {edited ? (
+                          <span className="calendar__detail-edited" data-testid="detail-edited">
+                            已修改 {card.revisionCount} 次
+                          </span>
+                        ) : null}
                         {card.schedule?.inferredYear ? (
                           <span className="calendar__detail-inferred">年份为推断所得</span>
                         ) : null}
                       </div>
+                      {historyCardId === card.id ? (
+                        <RevisionHistory cardId={card.id} load={onLoadRevisions} onClear={onClearRevisions} />
+                      ) : null}
                     </div>
-                    {editingCardId === card.id ? (
-                      <span className="calendar__detail-colors">
+
+                    <span className="calendar__detail-actions">
+                      <button
+                        type="button"
+                        className="button button--ghost"
+                        onClick={() => {
+                          setEditingDetailsId(card.id);
+                          setHistoryCardId(null);
+                        }}
+                        aria-label={`修改信息：${card.title}`}
+                      >
+                        修改
+                      </button>
+                      {edited ? (
+                        <button
+                          type="button"
+                          className="button button--ghost"
+                          aria-expanded={historyCardId === card.id}
+                          onClick={() =>
+                            setHistoryCardId((current) => (current === card.id ? null : card.id))
+                          }
+                        >
+                          {historyCardId === card.id ? '收起历史' : '改动历史'}
+                        </button>
+                      ) : null}
+                      {editingCardId === card.id ? (
                         <RgbColorPicker
                           label="这条安排的颜色"
                           value={resolveCardColor(card, styleForRender)}
@@ -415,29 +490,29 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
                             })
                           }
                         />
-                        {highlight.perCard[card.id] ? (
-                          <button
-                            type="button"
-                            className="button button--danger"
-                            onClick={() =>
-                              void commitColor(`card-${card.id}`, {
-                                highlight: { perCard: { [card.id]: null } },
-                              })
-                            }
-                          >
-                            恢复默认
-                          </button>
-                        ) : null}
-                      </span>
-                    ) : (
-                      <button
-                        type="button"
-                        className="button button--ghost"
-                        onClick={() => setEditingCardId(card.id)}
-                      >
-                        改颜色
-                      </button>
-                    )}
+                      ) : (
+                        <button
+                          type="button"
+                          className="button button--ghost"
+                          onClick={() => setEditingCardId(card.id)}
+                        >
+                          改颜色
+                        </button>
+                      )}
+                      {editingCardId === card.id && highlight.perCard[card.id] ? (
+                        <button
+                          type="button"
+                          className="button button--danger"
+                          onClick={() =>
+                            void commitColor(`card-${card.id}`, {
+                              highlight: { perCard: { [card.id]: null } },
+                            })
+                          }
+                        >
+                          恢复默认
+                        </button>
+                      ) : null}
+                    </span>
                   </li>
                 );
               })}

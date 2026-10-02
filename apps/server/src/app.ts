@@ -116,6 +116,40 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return reply.code(201).send(card);
   });
 
+  app.patch('/api/cards/:id', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const updated = options.cardService.updateCard(id, request.body);
+    if (!updated) {
+      return reply
+        .code(404)
+        .send({ error: { code: 'CARD_NOT_FOUND', message: '信息卡不存在或已被删除' } });
+    }
+    return reply.code(200).send(updated);
+  });
+
+  app.get('/api/cards/:id/revisions', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const card = options.cardService.getCard(id);
+    // 卡片不存在时给 404，而不是一个空列表——空列表会被读成"没改过"
+    if (!card) {
+      return reply
+        .code(404)
+        .send({ error: { code: 'CARD_NOT_FOUND', message: '信息卡不存在或已被删除' } });
+    }
+    return reply.code(200).send({ revisions: options.cardService.listRevisions(id) });
+  });
+
+  app.delete('/api/cards/:id/revisions', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const removed = options.cardService.clearRevisions(id);
+    if (removed === null) {
+      return reply
+        .code(404)
+        .send({ error: { code: 'CARD_NOT_FOUND', message: '信息卡不存在或已被删除' } });
+    }
+    return reply.code(200).send({ removed, revisions: [] });
+  });
+
   app.delete('/api/cards/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
     const deleted = options.cardService.deleteCard(id);

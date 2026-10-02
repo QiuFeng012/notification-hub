@@ -2,10 +2,12 @@ import {
   DEFAULT_HIGHLIGHT_STYLE,
   HEX_COLOR_PATTERN,
   type CardListResponse,
+  type CardRevision,
   type HighlightStyle,
   type InfoCard,
   type SettingsSource,
   type SettingsView,
+  type UpdateCardRequest,
   type UpdateSettingsRequest,
   type UpdateSettingsResponse,
 } from '@notification-hub/shared';
@@ -70,6 +72,12 @@ async function requestJson(path: string, init?: RequestInit & { json?: unknown }
 export interface CardApi {
   listCards(): Promise<CardView[]>;
   createCard(rawText: string, keywords?: string[]): Promise<CardView>;
+  /** 编辑一张卡片；返回更新后的卡片 */
+  updateCard(id: string, patch: UpdateCardRequest): Promise<CardView>;
+  /** 某张卡片的改动历史，最新的在最前 */
+  listRevisions(id: string): Promise<CardRevision[]>;
+  /** 清空某张卡片的改动历史（内容不动） */
+  clearRevisions(id: string): Promise<void>;
   deleteCard(id: string): Promise<void>;
 }
 
@@ -96,9 +104,60 @@ export function createCardApi(): CardApi {
       return view;
     },
 
+    async updateCard(id: string, patch: UpdateCardRequest) {
+      const payload = (await requestJson(`/api/cards/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        json: patch,
+      })) as InfoCard;
+
+      const view = toCardView(payload);
+      if (!view) {
+        throw new ApiError('INVALID_RESPONSE', '服务端返回的信息卡格式不正确', 500);
+      }
+      return view;
+    },
+
+    async listRevisions(id: string) {
+      const payload = (await requestJson(`/api/cards/${encodeURIComponent(id)}/revisions`)) as {
+        revisions?: unknown;
+      } | null;
+      const raw = Array.isArray(payload?.revisions) ? payload.revisions : [];
+      return raw
+        .map((item) => toCardRevision(item))
+        .filter((item): item is CardRevision => item !== null);
+    },
+
+    async clearRevisions(id: string) {
+      await requestJson(`/api/cards/${encodeURIComponent(id)}/revisions`, { method: 'DELETE' });
+    },
+
     async deleteCard(id: string) {
       await requestJson(`/api/cards/${encodeURIComponent(id)}`, { method: 'DELETE' });
     },
+  };
+}
+
+/** 归一化服务端返回的历史记录，字段缺失或损坏时丢弃该条 */
+export function toCardRevision(input: unknown): CardRevision | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const record = input as Record<string, unknown>;
+  if (typeof record.id !== 'number' || typeof record.cardId !== 'string') return null;
+
+  const reason: CardRevision['reason'] =
+    record.reason === 'official' || record.reason === 'manual' ? record.reason : 'other';
+
+  return {
+    id: record.id,
+    cardId: record.cardId,
+    reason,
+    note: typeof record.note === 'string' && record.note.length > 0 ? record.note : null,
+    previousTitle: typeof record.previousTitle === 'string' ? record.previousTitle : '',
+    previousTime: typeof record.previousTime === 'string' ? record.previousTime : null,
+    previousSource: typeof record.previousSource === 'string' ? record.previousSource : null,
+    previousKeyPoints: Array.isArray(record.previousKeyPoints)
+      ? record.previousKeyPoints.filter((item): item is string => typeof item === 'string')
+      : [],
+    createdAt: typeof record.createdAt === 'string' ? record.createdAt : '',
   };
 }
 

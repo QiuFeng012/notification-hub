@@ -1,14 +1,19 @@
+import type { CardRevision, UpdateCardRequest } from '@notification-hub/shared';
 import { CardItem } from './CardItem';
 import type { CardView } from '../lib/card-view';
 
 interface CardListProps {
   cards: CardView[];
   loading: boolean;
+  /** 提交修改；返回是否成功 */
+  onEdit: (id: string, patch: UpdateCardRequest) => Promise<boolean>;
+  onLoadRevisions: (id: string) => Promise<CardRevision[]>;
+  onClearRevisions: (id: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }
 
 /** 信息卡列表：按入库时间倒序的时间流 */
-export function CardList({ cards, loading, onDelete }: CardListProps) {
+export function CardList({ cards, loading, onEdit, onLoadRevisions, onClearRevisions, onDelete }: CardListProps) {
   if (loading) {
     return (
       <div className="state state--loading" role="status">
@@ -29,7 +34,14 @@ export function CardList({ cards, loading, onDelete }: CardListProps) {
   return (
     <div className="card-list">
       {cards.map((card) => (
-        <CardItem key={card.id} card={card} onDelete={onDelete} />
+        <CardItem
+          key={card.id}
+          card={card}
+          onEdit={onEdit}
+          onLoadRevisions={onLoadRevisions}
+          onClearRevisions={onClearRevisions}
+          onDelete={onDelete}
+        />
       ))}
     </div>
   );

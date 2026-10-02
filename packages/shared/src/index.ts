@@ -2,7 +2,42 @@ import type { CardSchedule, HighlightStyle } from './calendar.js';
 
 // 只再导出类型。不能用 `export *`——那会生成运行时 import，
 // 而共享包只有 .ts 源码，编译后的服务端找不到 './calendar.js'。
-export type { CardSchedule, HighlightStyle } from './calendar.js';
+export type {
+  CardRevision,
+  CardRevisionListResponse,
+  CardSchedule,
+  HighlightStyle,
+  RevisionReason,
+  UpdateCardRequest,
+} from './calendar.js';
+
+/** 修改原因的中文标签。放在这里是因为前后端都要用，且是运行时值。 */
+export const REVISION_REASON_LABELS: Record<'official' | 'manual' | 'other', string> = {
+  official: '官方通知更新',
+  manual: '我手动更正',
+  other: '其他',
+};
+
+/**
+ * 手工编辑时的字段上限。
+ *
+ * 刻意与 AI 生成时的上限分开命名：AI 生成要点限制在 6 条 / 120 字，
+ * 是"要点就该短"的产品约束；而手工订正官方变更时，用户可能需要
+ * 写得更全一点。两套限制服务的目的不同，不该共用同一个常量。
+ */
+export const EDIT_MAX_KEY_POINTS = 12;
+export const EDIT_MAX_KEY_POINT_LENGTH = 200;
+export const EDIT_MAX_TITLE_LENGTH = 120;
+export const EDIT_MAX_SOURCE_LENGTH = 60;
+export const EDIT_MAX_TIME_LENGTH = 80;
+export const EDIT_MAX_NOTE_LENGTH = 200;
+
+/** 合法的修改原因 */
+export const REVISION_REASONS = ['official', 'manual', 'other'] as const;
+
+export function isRevisionReason(value: unknown): value is 'official' | 'manual' | 'other' {
+  return typeof value === 'string' && (REVISION_REASONS as readonly string[]).includes(value);
+}
 
 /** 内置默认荧光笔配色：数量少、区分度高，且在米白底上都能看清 */
 export const DEFAULT_HIGHLIGHT_STYLE: HighlightStyle = {
@@ -71,6 +106,10 @@ export interface InfoCard {
   provider: SummaryProvider;
   /** 创建时间，ISO 8601 字符串 */
   createdAt: string;
+  /** 最近一次编辑时间；从未编辑过为 null */
+  updatedAt: string | null;
+  /** 改动次数；历史版本条数与它一致 */
+  revisionCount: number;
 }
 
 export type SummaryProvider = 'deepseek' | 'mock';

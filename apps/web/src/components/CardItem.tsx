@@ -1,9 +1,15 @@
 import { useState } from 'react';
-import type { CardKeywords } from '@notification-hub/shared';
+import type { CardKeywords, CardRevision, UpdateCardRequest } from '@notification-hub/shared';
 import { formatRelative, type CardView } from '../lib/card-view';
+import { CardEditForm } from './CardEditForm';
+import { RevisionHistory } from './RevisionHistory';
 
 interface CardItemProps {
   card: CardView;
+  /** 提交修改；返回是否成功 */
+  onEdit: (id: string, patch: UpdateCardRequest) => Promise<boolean>;
+  onLoadRevisions: (id: string) => Promise<CardRevision[]>;
+  onClearRevisions: (id: string) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
 }
 
@@ -76,11 +82,33 @@ export function highlightSegments(
 const FALLBACK_PREFIX = '（关注点）';
 
 /** 单张信息卡：标题 + 元信息 + 要点列表，原文默认折叠 */
-export function CardItem({ card, onDelete }: CardItemProps) {
+export function CardItem({ card, onEdit, onLoadRevisions, onClearRevisions, onDelete }: CardItemProps) {
   const [showRaw, setShowRaw] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
 
   const { priority, hit, missed } = readKeywords(card);
   const hasKeywords = priority.length > 0;
+  const edited = card.revisionCount > 0;
+
+  if (editing) {
+    return (
+      <article className="card" data-testid="info-card">
+        <header className="card__header">
+          <h3 className="card__title">修改信息卡</h3>
+        </header>
+        <CardEditForm
+          card={card}
+          onSubmit={async (patch) => {
+            const ok = await onEdit(card.id, patch);
+            if (ok) setEditing(false);
+            return ok;
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      </article>
+    );
+  }
 
   return (
     <article className="card" data-testid="info-card">
@@ -103,6 +131,15 @@ export function CardItem({ card, onDelete }: CardItemProps) {
         <span className={card.provider === 'deepseek' ? 'chip chip--ai' : 'chip chip--mock'}>
           {card.provider === 'deepseek' ? 'AI 摘要' : '启发式摘要'}
         </span>
+        {edited ? (
+          <span
+            className="chip chip--edited"
+            data-testid="edited-badge"
+            title={card.updatedAt ? `最后修改于 ${card.updatedAt}` : undefined}
+          >
+            已修改 {card.revisionCount} 次
+          </span>
+        ) : null}
         {hit.length > 0 ? (
           <span className="chip chip--keyword" data-testid="keyword-hit">
             含你关注的：{hit.join('、')}
@@ -148,6 +185,24 @@ export function CardItem({ card, onDelete }: CardItemProps) {
       )}
 
       <footer className="card__footer">
+        <button
+          type="button"
+          className="button button--ghost"
+          onClick={() => setEditing(true)}
+          aria-label={`修改信息卡：${card.title}`}
+        >
+          修改
+        </button>
+        {edited ? (
+          <button
+            type="button"
+            className="button button--ghost"
+            aria-expanded={showHistory}
+            onClick={() => setShowHistory((value) => !value)}
+          >
+            {showHistory ? '收起改动历史' : '改动历史'}
+          </button>
+        ) : null}
         <button type="button" className="button button--ghost" onClick={() => setShowRaw((value) => !value)}>
           {showRaw ? '收起原文' : '查看原文'}
         </button>
@@ -161,6 +216,9 @@ export function CardItem({ card, onDelete }: CardItemProps) {
         </button>
       </footer>
 
+      {showHistory ? (
+        <RevisionHistory cardId={card.id} load={onLoadRevisions} onClear={onClearRevisions} />
+      ) : null}
       {showRaw ? <pre className="card__raw">{card.rawText}</pre> : null}
     </article>
   );

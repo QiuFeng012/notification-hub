@@ -22,6 +22,8 @@ function makeCard(overrides: Partial<InfoCard> = {}): InfoCard {
     keywords: { priority: [], hit: [], missed: [] },
     provider: 'mock',
     createdAt: new Date().toISOString(),
+    updatedAt: null,
+    revisionCount: 0,
     ...overrides,
   };
 }
@@ -333,6 +335,165 @@ describe('sqlite 仓储', () => {
       repo.close();
     }
   });
+
+  it('编辑后字段被替换，并记下改动次数与时间', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      const card = makeCard({ createdAt: '2026-09-20T10:00:00.000Z', time: '9月28日' });
+      repo.insert(card);
+
+      const updated = repo.update(card.id, { title: '新标题', keyPoints: ['新要点'] }, 'official', '官方改了');
+      assert.equal(updated?.title, '新标题');
+      assert.deepEqual(updated?.keyPoints, ['新要点']);
+      assert.equal(updated?.revisionCount, 1);
+      assert.ok(updated?.updatedAt, '编辑后应有 updatedAt');
+
+      // 改动前的字段没传就该保持不变
+      assert.equal(updated?.time, card.time);
+      assert.equal(updated?.source, card.source);
+    } finally {
+      repo.close();
+    }
+  });
+
+  it('历史里存的是改动前的内容，可追溯"从什么改成了什么"', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      const card = makeCard({ title: '原截止时间 3 月 8 日', keyPoints: ['原要点'] });
+      repo.insert(card);
+      repo.update(card.id, { title: '新截止时间 3 月 15 日' }, 'official', '教务推迟了一周');
+
+      const revisions = repo.listRevisions(card.id);
+      assert.equal(revisions.length, 1);
+      assert.equal(revisions[0]?.previousTitle, '原截止时间 3 月 8 日');
+      assert.deepEqual(revisions[0]?.previousKeyPoints, ['原要点']);
+      assert.equal(revisions[0]?.reason, 'official');
+      assert.equal(revisions[0]?.note, '教务推迟了一周');
+      assert.equal(revisions[0]?.cardId, card.id);
+    } finally {
+      repo.close();
+    }
+  });
+
+  it('多次编辑按时间倒序累积历史', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      const card = makeCard({ title: 'v1' });
+      repo.insert(card);
+      repo.update(card.id, { title: 'v2' }, 'manual', null);
+      repo.update(card.id, { title: 'v3' }, 'manual', null);
+
+      const revisions = repo.listRevisions(card.id);
+      assert.equal(revisions.length, 2);
+      assert.equal(revisions[0]?.previousTitle, 'v2', '最新一条记录的是 v2→v3');
+      assert.equal(revisions[1]?.previousTitle, 'v1');
+      assert.equal(repo.get(card.id)?.revisionCount, 2);
+    } finally {
+      repo.close();
+    }
+  });
+
+  it('改了时间会重算排期，日历位置随之移动', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      // 显式给出一个排期，不要被 makeCard 的默认 null 覆盖
+      const card = makeCard({
+        createdAt: '2026-09-20T10:00:00.000Z',
+        time: '2026年9月28日',
+        schedule: {
+          start: '2026-09-28',
+          end: '2026-09-28',
+          dayCount: 1,
+          label: '2026年9月28日',
+          inferredYear: false,
+        },
+      });
+      repo.insert(card);
+      assert.equal(repo.get(card.id)?.schedule?.start, '2026-09-28');
+
+      const updated = repo.update(card.id, { time: '2026年10月5日' }, 'official', null);
+      assert.equal(updated?.schedule?.start, '2026-10-05', '排期应跟着新时间走');
+    } finally {
+      repo.close();
+    }
+  });
+
+  it('把时间清空后排期也清空，卡片退出日历', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      const card = makeCard({
+        createdAt: '2026-09-20T10:00:00.000Z',
+        time: '2026年9月28日',
+        schedule: {
+          start: '2026-09-28',
+          end: '2026-09-28',
+          dayCount: 1,
+          label: '2026年9月28日',
+          inferredYear: false,
+        },
+      });
+      repo.insert(card);
+
+      const updated = repo.update(card.id, { time: null }, 'manual', null);
+      assert.equal(updated?.time, null);
+      assert.equal(updated?.schedule, null);
+    } finally {
+      repo.close();
+    }
+  });
+
+  it('编辑不存在的卡片返回 null，不抛错', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      assert.equal(repo.update('不存在的-id', { title: 'x' }, 'manual', null), null);
+      assert.deepEqual(repo.listRevisions('不存在的-id'), []);
+    } finally {
+      repo.close();
+    }
+  });
+
+  it('相对日期重算时锚点仍是卡片创建时间，不会跑成"今天"', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      // 卡片创建于 2026-09-20，原文说"明天"，应先排到 09-21
+      const card = makeCard({
+        createdAt: '2026-09-20T10:00:00.000Z',
+        time: '明天截止',
+        schedule: {
+          start: '2026-09-21',
+          end: '2026-09-21',
+          dayCount: 1,
+          label: '明天截止',
+          inferredYear: true,
+        },
+      });
+      repo.insert(card);
+      assert.equal(repo.get(card.id)?.schedule?.start, '2026-09-21');
+
+      // 只改标题、不动时间，排期不该变
+      const updated = repo.update(card.id, { title: '改了标题' }, 'manual', null);
+      assert.equal(updated?.schedule?.start, '2026-09-21', '锚点仍是创建时间，不该按今天重算');
+
+      // 显式把时间改成另一个相对日期，才按创建时间重新解释
+      const retimed = repo.update(card.id, { time: '后天截止' }, 'official', null);
+      assert.equal(retimed?.schedule?.start, '2026-09-22');
+    } finally {
+      repo.close();
+    }
+  });
+
+  it('删除卡片时历史一并删除', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      const card = makeCard();
+      repo.insert(card);
+      repo.update(card.id, { title: '改过' }, 'manual', null);
+      repo.delete(card.id);
+      assert.deepEqual(repo.listRevisions(card.id), []);
+    } finally {
+      repo.close();
+    }
+  });
 });
 
 describe('内存仓储', () => {
@@ -363,5 +524,33 @@ describe('内存仓储', () => {
       repo.list().map((card) => card.title),
       ['第二张', '第一张'],
     );
+  });
+
+  it('与 sqlite 行为一致：编辑与历史', () => {
+    const repo = createMemoryCardRepository();
+    const card = makeCard({ title: 'v1', createdAt: '2026-09-20T10:00:00.000Z', time: '2026年9月28日' });
+    repo.insert(card);
+
+    const updated = repo.update(card.id, { title: 'v2', time: '2026年10月5日' }, 'official', '官方变更');
+    assert.equal(updated?.title, 'v2');
+    assert.equal(updated?.revisionCount, 1);
+    assert.equal(updated?.schedule?.start, '2026-10-05');
+
+    const revisions = repo.listRevisions(card.id);
+    assert.equal(revisions.length, 1);
+    assert.equal(revisions[0]?.previousTitle, 'v1');
+    assert.equal(revisions[0]?.reason, 'official');
+
+    assert.equal(repo.update('不存在', { title: 'x' }, 'manual', null), null);
+  });
+
+  it('与 sqlite 行为一致：删除卡片一并清掉历史', () => {
+    const repo = createMemoryCardRepository();
+    const card = makeCard();
+    repo.insert(card);
+    repo.update(card.id, { title: '改过' }, 'manual', null);
+
+    repo.delete(card.id);
+    assert.deepEqual(repo.listRevisions(card.id), []);
   });
 });

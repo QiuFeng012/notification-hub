@@ -24,6 +24,49 @@ export interface CardSchedule {
   inferredYear: boolean;
 }
 
+/** 修改原因：用来区分"官方改了口径"和"我自己记错了" */
+export type RevisionReason = 'official' | 'manual' | 'other';
+
+/**
+ * 一次改动的快照。
+ *
+ * 存的是"改动前"的内容，所以把它的原因读出来就是：
+ * "因为 X，把 Y 改成了现在这样"。
+ */
+export interface CardRevision {
+  /** 自增序号 */
+  id: number;
+  cardId: string;
+  /** 改动原因 */
+  reason: RevisionReason;
+  /** 可选补充说明 */
+  note: string | null;
+  /** 改动前的标题 */
+  previousTitle: string;
+  previousTime: string | null;
+  previousSource: string | null;
+  previousKeyPoints: string[];
+  /** 改动时间，ISO 8601 */
+  createdAt: string;
+}
+
+/** GET /api/cards/:id/revisions 的响应 */
+export interface CardRevisionListResponse {
+  revisions: CardRevision[];
+}
+
+/** PATCH /api/cards/:id 的请求体：只传要改的字段 */
+export interface UpdateCardRequest {
+  title?: string;
+  /** null 表示清空时间 */
+  time?: string | null;
+  source?: string | null;
+  keyPoints?: string[];
+  /** 修改原因，必填——否则日后无法解释这条为什么和原文不一致 */
+  reason: RevisionReason;
+  note?: string;
+}
+
 /**
  * 日历上的荧光笔颜色配置。
  * 只存"用户显式改过的"部分，其余由前端按卡片 id 稳定派生默认色，

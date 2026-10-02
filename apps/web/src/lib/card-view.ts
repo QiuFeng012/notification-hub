@@ -19,6 +19,10 @@ export interface CardView {
   createdAt: string;
   /** 入库时间，格式化为 "2025-03-05 14:32" */
   createdAtLabel: string;
+  /** 最近一次编辑时间；从未编辑为 null */
+  updatedAt: string | null;
+  /** 改动次数；大于 0 时界面显示"已修改"标记 */
+  revisionCount: number;
 }
 
 /**
@@ -49,6 +53,8 @@ export function toCardView(input: unknown): CardView | null {
     provider: card.provider === 'deepseek' ? 'deepseek' : 'mock',
     createdAt: typeof card.createdAt === 'string' ? card.createdAt : '',
     createdAtLabel: formatTimestamp(card.createdAt),
+    updatedAt: typeof card.updatedAt === 'string' && card.updatedAt.length > 0 ? card.updatedAt : null,
+    revisionCount: typeof card.revisionCount === 'number' && card.revisionCount > 0 ? card.revisionCount : 0,
   };
 }
 

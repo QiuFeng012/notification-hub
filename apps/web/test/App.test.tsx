@@ -20,6 +20,8 @@ function makeCard(overrides: Partial<CardView> = {}): CardView {
     provider: 'deepseek',
     createdAt: '2025-03-05T06:32:00.000Z',
     createdAtLabel: '2025-03-05 14:32',
+    updatedAt: null,
+    revisionCount: 0,
     ...overrides,
   };
 }
@@ -46,6 +48,9 @@ function createFakeApi(options: FakeApiOptions = {}) {
   const api: CardApi = {
     listCards: vi.fn(async () => options.initial ?? []),
     createCard: vi.fn(options.createImpl ?? (async () => makeCard())),
+    updateCard: vi.fn(async (id: string, patch) => makeCard({ id, ...patch })),
+    listRevisions: vi.fn(async () => []),
+    clearRevisions: vi.fn(async () => undefined),
     deleteCard: vi.fn(options.deleteImpl ?? (async () => undefined)),
   };
   return api;

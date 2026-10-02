@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { MAX_KEYWORDS, MAX_RAW_TEXT_LENGTH } from '@notification-hub/shared';
+import type { CardRevision, UpdateCardRequest } from '@notification-hub/shared';
 import { ApiError, type CardApi } from '../lib/api';
 import type { CardView } from '../lib/card-view';
 
@@ -12,6 +13,12 @@ export interface UseCardsResult {
   dismissError: () => void;
   /** keywords 是一次性的本次关注点，不进入任何长期配置 */
   submit: (rawText: string, keywords?: string[]) => Promise<boolean>;
+  /** 编辑一张卡片；成功返回更新后的卡片，失败返回 null 并设置错误 */
+  edit: (id: string, patch: UpdateCardRequest) => Promise<CardView | null>;
+  /** 拉取某张卡片的改动历史 */
+  revisions: (id: string) => Promise<CardRevision[]>;
+  /** 清空某张卡片的改动历史（内容不动） */
+  clearRevisions: (id: string) => Promise<void>;
   remove: (id: string) => Promise<void>;
 }
 
@@ -83,6 +90,42 @@ export function useCards(api: CardApi): UseCardsResult {
     [api],
   );
 
+  const edit = useCallback(
+    async (id: string, patch: UpdateCardRequest) => {
+      setError(null);
+      try {
+        const updated = await api.updateCard(id, patch);
+        // 用服务端返回的整条替换：排期、revisionCount 都是由服务端算的，
+        // 本地拼一份容易和后端不一致。
+        setCards((previous) => previous.map((card) => (card.id === id ? updated : card)));
+        return updated;
+      } catch (caught) {
+        setError(`修改失败：${toMessage(caught)}`);
+        return null;
+      }
+    },
+    [api],
+  );
+
+  const revisions = useCallback((id: string) => api.listRevisions(id), [api]);
+
+  const clearRevisions = useCallback(
+    async (id: string) => {
+      setError(null);
+      try {
+        await api.clearRevisions(id);
+        // 计数归零要反映到界面上，所以本地同步更新
+        setCards((previous) =>
+          previous.map((card) => (card.id === id ? { ...card, revisionCount: 0 } : card)),
+        );
+      } catch (caught) {
+        setError(`清空改动历史失败：${toMessage(caught)}`);
+        throw caught;
+      }
+    },
+    [api],
+  );
+
   const remove = useCallback(
     async (id: string) => {
       const snapshot = cards;
@@ -98,5 +141,16 @@ export function useCards(api: CardApi): UseCardsResult {
     [api, cards],
   );
 
-  return { cards, loading, submitting, error, dismissError, submit, remove };
+  return {
+    cards,
+    loading,
+    submitting,
+    error,
+    dismissError,
+    submit,
+    edit,
+    revisions,
+    clearRevisions,
+    remove,
+  };
 }
