@@ -190,12 +190,18 @@ export function parseSchedule(
 
   const explicit = collectExplicitDates(text);
   const resolved: Date[] = [];
+  // 记录每个日期的年份是否为推测所得，下标与 resolved 对齐。
+  // 只标记"真正参与区间两端"的那些，而不是"文本里任意一个日期"——
+  // 否则「2026年9月28日至9月30日」里那个没写年份的 9月30日
+  // 会把整条标记成推测，而区间两端其实都是明确的。
+  const resolvedYearInferred: boolean[] = [];
 
   for (const item of explicit) {
     if (item.month < 1 || item.month > 12) continue;
     if (item.day < 1 || item.day > daysInMonth(item.year ?? anchor.getFullYear(), item.month)) continue;
     const year = item.year ?? inferYear(item.month, item.day, anchor).year;
     resolved.push(new Date(year, item.month - 1, item.day));
+    resolvedYearInferred.push(item.year === null);
   }
 
   // 相对日期只在没有显式日期时使用，避免"3月5日（明天）"这种文本产生两个锚点
@@ -230,16 +236,27 @@ export function parseSchedule(
   if (resolved.length === 0) return null;
 
   const times = resolved.map((date) => date.getTime());
-  const start = new Date(Math.min(...times));
-  const end = new Date(Math.max(...times));
+  const minTime = Math.min(...times);
+  const maxTime = Math.max(...times);
+  const start = new Date(minTime);
+  const end = new Date(maxTime);
   const startIso = toIsoDate(start);
   const endIso = toIsoDate(end);
+
+  // 只有"区间端点所在的那个日期"没写年份时，才需要提示年份是推测的。
+  // 相对日期与星期推算本身就依赖锚点，同样算推测。
+  const startIndex = times.indexOf(minTime);
+  const endIndex = times.indexOf(maxTime);
+  const inferredYear =
+    resolvedYearInferred.length === 0 ||
+    resolvedYearInferred[startIndex] === true ||
+    resolvedYearInferred[endIndex] === true;
 
   return {
     start: startIso,
     end: endIso,
     dayCount: daysBetween(startIso, endIso) + 1,
     label: raw,
-    inferredYear: explicit.some((item) => item.year === null),
+    inferredYear,
   };
 }

@@ -2,13 +2,14 @@ import { useMemo, useState } from 'react';
 import type { HighlightStyle, UpdateSettingsRequest } from '@notification-hub/shared';
 import type { CardView } from '../lib/card-view';
 import {
-  buildMonthGrid,
+  buildMonthWeeks,
   countUnscheduled,
-  groupCardsByDate,
   isDateInSchedule,
   resolveCardColor,
   shiftMonth,
   splitIsoDate,
+  type CalendarWeek,
+  type ScheduleSpan,
 } from '../lib/calendar';
 
 const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
@@ -29,11 +30,6 @@ interface CalendarViewProps {
   today: string;
 }
 
-function formatMonthTitle(year: number, month: number): string {
-  return `${year} 年 ${month} 月`;
-}
-
-/** 把 YYYY-MM-DD 显示成 "3月5日 周三" */
 function formatDateLabel(date: string): string {
   const parts = splitIsoDate(date);
   if (!parts) return date;
@@ -43,13 +39,14 @@ function formatDateLabel(date: string): string {
 }
 
 /**
- * 日历视图：以月历为表，看哪条信息卡在哪天有安排。
+ * 日历视图：以周为行，圆点表示日期，区间用「圆—矩形—圆」拉出来。
  *
- * 两个刻意的设计：
- *   - 解析不出日期的卡片**不画进日历**，并在顶部如实告知数量。
- *     把它们堆在某一天会让人误以为那天真的有安排。
- *   - 多日卡片在它覆盖的每一格上都画荧光笔，颜色按卡片 id 稳定分配，
- *     所以同一条通知在整段区间里是同一种颜色，不同通知颜色不同。
+ * 布局来自用户的要求：
+ *   - 每个周的第一行是本周的日期（圆形），只显示本月的日子，
+ *     本月只有 4 天就只画 4 个圆——补位空格正是之前界面显得空荡的原因。
+ *   - 有事件时在其下方一行画持续区间：起始与结束各一个圆，中间用等宽矩形连接。
+ *   - 同一周里区间有重合就换到下一行，不重合的共用一行，避免行数虚增。
+ *   - 本周没有任何事件就不画事件行。
  */
 export function CalendarView({ cards, loading, highlight, onSaveHighlight, today }: CalendarViewProps) {
   const todayParts = splitIsoDate(today);
@@ -61,19 +58,21 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
   const [showColorPanel, setShowColorPanel] = useState(false);
 
-  const byDate = useMemo(() => groupCardsByDate(cards), [cards]);
-  const unscheduled = useMemo(() => countUnscheduled(cards), [cards]);
-  const cells = useMemo(
-    () => buildMonthGrid(cursor.year, cursor.month, today),
-    [cursor.year, cursor.month, today],
+  const weeks = useMemo(
+    () => buildMonthWeeks({ year: cursor.year, month: cursor.month, today, cards }),
+    [cursor.year, cursor.month, today, cards],
   );
-
+  const unscheduled = useMemo(() => countUnscheduled(cards), [cards]);
   const multiDayCards = useMemo(
     () => cards.filter((card) => (card.schedule?.dayCount ?? 0) >= 2),
     [cards],
   );
 
-  const selectedCards = selectedDate ? byDate.get(selectedDate) ?? [] : [];
+  /** 选中日期当天的安排 */
+  const selectedCards = useMemo(() => {
+    if (!selectedDate) return [];
+    return cards.filter((card) => isDateInSchedule(selectedDate, card.schedule));
+  }, [cards, selectedDate]);
 
   function go(delta: number) {
     setCursor((current) => shiftMonth(current.year, current.month, delta));
@@ -90,6 +89,40 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
     setEditingCardId(null);
   }
 
+  function renderSpan(span: ScheduleSpan<CardView>, week: CalendarWeek<CardView>) {
+    const color = resolveCardColor(span.card, highlight);
+    const isMulti = (span.card.schedule?.dayCount ?? 1) >= 2;
+    // 圆只画在"区间真正开始/结束的那一天"。
+    // 刻意不看列下标：从上周延续过来的段即使落在第 1 列，也不是起点，
+    // 画成圆会让人以为安排从那周的头一天才开始。
+    const showStart = span.startsHere;
+    const showEnd = span.endsHere;
+
+    return (
+      <button
+        key={`${week.days[0]?.date ?? 'w'}-${span.card.id}`}
+        type="button"
+        className={isMulti ? 'span span--multi' : 'span span--single'}
+        data-testid="calendar-span"
+        data-card-id={span.card.id}
+        style={{
+          gridColumn: `${span.startColumn + 1} / ${span.endColumn + 2}`,
+          gridRow: span.lane + 2,
+          ['--span-color' as string]: color,
+        }}
+        title={`${span.card.title}（${span.card.schedule?.label ?? ''}）`}
+        onClick={() => setSelectedDate(week.days[span.startColumn]?.date ?? null)}
+      >
+        {/* 起始圆：区间从更早的周延续过来时不画，改为平头，示意还没结束 */}
+        <span className={showStart ? 'span__cap span__cap--start' : 'span__edge span__edge--start'} />
+        <span className="span__bar">
+          <span className="span__label">{span.card.title}</span>
+        </span>
+        <span className={showEnd ? 'span__cap span__cap--end' : 'span__edge span__edge--end'} />
+      </button>
+    );
+  }
+
   return (
     <div className="calendar">
       <div className="calendar__toolbar">
@@ -97,12 +130,14 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
           <button type="button" className="button button--ghost" onClick={() => go(-1)} aria-label="上个月">
             ‹
           </button>
-          <span className="calendar__title">{formatMonthTitle(cursor.year, cursor.month)}</span>
+          <span className="calendar__title">
+            {cursor.year} 年 {cursor.month} 月
+          </span>
           <button type="button" className="button button--ghost" onClick={() => go(1)} aria-label="下个月">
             ›
           </button>
           <button type="button" className="button button--ghost" onClick={goToday}>
-            回到今天
+            今天
           </button>
         </div>
         <button
@@ -123,9 +158,7 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
               <button
                 key={`single-${color}`}
                 type="button"
-                className={
-                  highlight.singleDay === color ? 'swatch swatch--active' : 'swatch'
-                }
+                className={highlight.singleDay === color ? 'swatch swatch--active' : 'swatch'}
                 style={{ background: color }}
                 aria-label={`单日颜色 ${color}`}
                 onClick={() => void onSaveHighlight({ highlight: { singleDay: color } })}
@@ -154,7 +187,7 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
             ))}
           </div>
           <p className="calendar__hint">
-            多日卡片的颜色按顺序循环使用，保证相邻通知颜色不同。想单独改某一条，
+            多日区间的颜色按顺序循环，保证相邻安排颜色不同。想单独改某一条，
             点日期后在该条目上点「改颜色」。
           </p>
         </div>
@@ -163,14 +196,14 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
       {unscheduled > 0 ? (
         <p className="calendar__notice">
           有 <strong>{unscheduled}</strong> 张卡没能解析出日期（例如时间是「待定」「未识别」），
-          因此没有排进日历。补上明确日期后它们会出现在这里。
+          因此没有排进日历。
         </p>
       ) : null}
 
-      <div className="calendar__weekdays">
+      <div className="calendar__weekdays" style={{ gridTemplateColumns: `repeat(7, minmax(0, 1fr))` }}>
         {WEEKDAY_LABELS.map((label) => (
           <span key={label} className="calendar__weekday">
-            周{label}
+            {label}
           </span>
         ))}
       </div>
@@ -180,49 +213,39 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
           正在读取历史信息卡…
         </div>
       ) : (
-        <div className="calendar__grid">
-          {cells.map((cell) => {
-            const dayCards = byDate.get(cell.date) ?? [];
-            const classes = ['calendar__cell'];
-            if (!cell.inMonth) classes.push('calendar__cell--outside');
-            if (cell.isToday) classes.push('calendar__cell--today');
-            if (selectedDate === cell.date) classes.push('calendar__cell--selected');
+        <div className="calendar__weeks">
+          {weeks.map((week) => (
+            <div
+              key={week.days[0]?.date ?? 'week'}
+              className="calendar__week"
+              data-testid="calendar-week"
+              data-days={week.columnCount}
+              style={{ gridTemplateColumns: `repeat(${week.columnCount}, minmax(0, 1fr))` }}
+            >
+              {/* 第一行：本周日期，圆形，仅本月 */}
+              {week.days.map((day, column) => {
+                const classes = ['day-circle'];
+                if (day.isToday) classes.push('day-circle--today');
+                if (selectedDate === day.date) classes.push('day-circle--selected');
+                return (
+                  <button
+                    key={day.date}
+                    type="button"
+                    className={classes.join(' ')}
+                    data-testid="calendar-day"
+                    data-date={day.date}
+                    style={{ gridColumn: column + 1, gridRow: 1 }}
+                    onClick={() => setSelectedDate(day.date === selectedDate ? null : day.date)}
+                  >
+                    {day.day}
+                  </button>
+                );
+              })}
 
-            return (
-              <button
-                key={cell.date}
-                type="button"
-                className={classes.join(' ')}
-                data-testid="calendar-cell"
-                data-date={cell.date}
-                onClick={() => setSelectedDate(cell.date === selectedDate ? null : cell.date)}
-              >
-                <span className="calendar__day">{cell.day}</span>
-                <span className="calendar__marks">
-                  {dayCards.map((card) => {
-                    const color = resolveCardColor(card, highlight);
-                    const isMulti = (card.schedule?.dayCount ?? 1) >= 2;
-                    return (
-                      <span
-                        key={`${cell.date}-${card.id}`}
-                        className={isMulti ? 'calendar__mark calendar__mark--multi' : 'calendar__mark'}
-                        data-testid="calendar-mark"
-                        data-card-id={card.id}
-                        style={
-                          isMulti
-                            ? { background: color, borderColor: color }
-                            : { borderColor: color, color }
-                        }
-                        title={card.title}
-                      >
-                        {card.title}
-                      </span>
-                    );
-                  })}
-                </span>
-              </button>
-            );
-          })}
+              {/* 第二行起：区间。无事件时这一块为空，整周就只有日期那一行 */}
+              {week.spans.map((span) => renderSpan(span, week))}
+            </div>
+          ))}
         </div>
       )}
 
@@ -255,7 +278,7 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
                             {isLastDay && !isFirstDay ? '（结束）' : ''}
                           </span>
                         ) : null}
-                        {isDateInSchedule(selectedDate, card.schedule) && card.schedule?.inferredYear ? (
+                        {card.schedule?.inferredYear ? (
                           <span className="calendar__detail-inferred">年份为推断所得</span>
                         ) : null}
                       </div>
@@ -301,8 +324,8 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
 
       {multiDayCards.length > 0 ? (
         <p className="calendar__hint calendar__hint--legend">
-          多日安排共 {multiDayCards.length} 条，已用荧光笔铺满其覆盖的每一天：
-          {multiDayCards.slice(0, 5).map((card) => (
+          多日安排 {multiDayCards.length} 条，已在对应周里拉成区间：
+          {multiDayCards.slice(0, 6).map((card) => (
             <span key={card.id} className="calendar__legend-item">
               <span
                 className="calendar__legend-dot"
@@ -312,7 +335,7 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
               {card.title}（{card.schedule?.dayCount} 天）
             </span>
           ))}
-          {multiDayCards.length > 5 ? <span>等</span> : null}
+          {multiDayCards.length > 6 ? <span>等</span> : null}
         </p>
       ) : null}
     </div>

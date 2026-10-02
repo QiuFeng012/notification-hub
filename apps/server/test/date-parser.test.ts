@@ -187,6 +187,48 @@ describe('parseSchedule 年份推断', () => {
     assert.equal(schedule('2025年3月8日')?.inferredYear, false);
   });
 
+  it('区间端点的年份是明确写法时不算推测', () => {
+    const anchor = new Date(2026, 8, 20);
+    // 只有两个明确的端点，没有其他没写年份的日期
+    const result = schedule('2026年9月28日至2026年9月30日', anchor);
+
+    assert.equal(result?.start, '2026-09-28');
+    assert.equal(result?.end, '2026-09-30');
+    assert.equal(result?.inferredYear, false, '两端年份都写明了，不该说"年份为推断"');
+  });
+
+  it('没写年份的日期成为区间端点时仍算推测', () => {
+    // 文中「9月25日」没写年份，而且它成了区间起点，所以要如实标记为推测
+    const anchor = new Date(2026, 8, 20);
+    const result = schedule('本次运动会定于2026年9月28日至2026年9月30日举行，9月25日前报名。', anchor);
+
+    assert.equal(result?.start, '2026-09-25');
+    assert.equal(result?.end, '2026-09-30');
+    assert.equal(result?.inferredYear, true);
+  });
+
+  it('区间有一端没写年份时仍算推测', () => {
+    const anchor = new Date(2026, 8, 20);
+    const result = schedule('2026年9月28日至9月30日', anchor);
+
+    assert.equal(result?.start, '2026-09-28');
+    assert.equal(result?.end, '2026-09-30');
+    assert.equal(result?.inferredYear, true);
+  });
+
+  it('没写年份的日期被文中已写明年份的日期带上同一年', () => {
+    // 「2026年9月28日…9月30日」这种写法很常见，两端应落在同一年
+    const anchor = new Date(2026, 8, 20);
+    const result = schedule('活动时间为2026年9月28日到9月30日', anchor);
+    assert.equal(result?.start, '2026-09-28');
+    assert.equal(result?.end, '2026-09-30');
+  });
+
+  it('相对日期与星期推算都算推测', () => {
+    assert.equal(schedule('明天截止')?.inferredYear, true);
+    assert.equal(schedule('本周五截止')?.inferredYear, true);
+  });
+
   it('无效月日被丢弃而不是算出错误日期', () => {
     // 2月30日不存在
     assert.equal(schedule('2月30日截止'), null);
