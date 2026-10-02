@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { MAX_API_KEY_LENGTH } from '@notification-hub/shared';
 import { ApiError, type SettingsApi } from '../lib/api';
 import { toSettingsView } from '../lib/api';
-import type { SettingsView } from '@notification-hub/shared';
+import type { SettingsView, UpdateSettingsRequest } from '@notification-hub/shared';
 
 export interface UseSettingsResult {
   settings: SettingsView | null;
@@ -12,7 +12,7 @@ export interface UseSettingsResult {
   notice: string | null;
   error: string | null;
   dismiss: () => void;
-  save: (patch: { apiKey?: string; baseUrl?: string; model?: string }) => Promise<boolean>;
+  save: (patch: UpdateSettingsRequest) => Promise<boolean>;
   clear: () => Promise<void>;
 }
 
@@ -56,7 +56,7 @@ export function useSettings(api: SettingsApi): UseSettingsResult {
   }, []);
 
   const save = useCallback(
-    async (patch: { apiKey?: string; baseUrl?: string; model?: string }) => {
+    async (patch: UpdateSettingsRequest) => {
       const key = patch.apiKey?.trim();
       if (key !== undefined && key.length > MAX_API_KEY_LENGTH) {
         setError(`API Key 过长（${key.length} 字符），上限 ${MAX_API_KEY_LENGTH} 字符`);
@@ -69,7 +69,14 @@ export function useSettings(api: SettingsApi): UseSettingsResult {
       try {
         const result = await api.updateSettings(patch);
         setSettings(result.settings);
-        setNotice(result.warning ?? '设置已保存');
+        // 改荧光笔颜色这类纯外观操作不该弹"设置已保存"打扰用户；
+        // 只有 Key / 地址 / 模型这些有实际后果的改动才提示。
+        const isColorOnly =
+          patch.apiKey === undefined &&
+          patch.baseUrl === undefined &&
+          patch.model === undefined &&
+          patch.highlight !== undefined;
+        setNotice(result.warning ?? (isColorOnly ? null : '设置已保存'));
         return true;
       } catch (caught) {
         setError(toMessage(caught));

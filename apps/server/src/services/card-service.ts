@@ -9,6 +9,7 @@ import type { Summarizer } from '../ai/types.js';
 import type { SummarizerProvider } from '../ai/provider.js';
 import type { CardRepository } from '../db/repository.js';
 import { enforceKeywords } from '../keywords/keyword-check.js';
+import { parseSchedule } from '../calendar/date-parser.js';
 
 /** 业务规则被违反时抛出，由 HTTP 层映射成 4xx */
 export class ValidationError extends Error {
@@ -65,8 +66,21 @@ function isProvider(source: SummarizerSource): source is SummarizerProvider {
   return typeof (source as SummarizerProvider).get === 'function';
 }
 
-export function createCardService(repo: CardRepository, source: SummarizerSource): CardService {
+export interface CardServiceOptions {
+  /**
+   * 当前时间来源，用于相对日期（今天/明天）与年份推断。
+   * 可注入是为了让测试拿到确定结果，而不是跟着运行时间漂。
+   */
+  now?: () => Date;
+}
+
+export function createCardService(
+  repo: CardRepository,
+  source: SummarizerSource,
+  options: CardServiceOptions = {},
+): CardService {
   const resolveSummarizer = (): Summarizer => (isProvider(source) ? source.get() : source);
+  const now = options.now ?? (() => new Date());
 
   return {
     async createCard(input) {
@@ -81,6 +95,11 @@ export function createCardService(repo: CardRepository, source: SummarizerSource
 
       const keywords: CardKeywords = checked.keywords;
 
+      const createdAt = now();
+      // 日历排期从模型给出的时间文本解析。解析不出就是 null——
+      // 排不上日历比排错位置安全，界面上会明确说明这张卡没有日期。
+      const schedule = parseSchedule(draft.time, { anchor: createdAt });
+
       const card: InfoCard = {
         id: randomUUID(),
         title: draft.title,
@@ -88,9 +107,10 @@ export function createCardService(repo: CardRepository, source: SummarizerSource
         source: draft.source,
         keyPoints: checked.keyPoints,
         rawText,
+        schedule,
         keywords,
         provider,
-        createdAt: new Date().toISOString(),
+        createdAt: createdAt.toISOString(),
       };
 
       return repo.insert(card);

@@ -18,6 +18,7 @@ function makeCard(overrides: Partial<InfoCard> = {}): InfoCard {
     source: '教务处',
     keyPoints: ['要点一', '要点二'],
     rawText: '通知原文',
+    schedule: null,
     keywords: { priority: [], hit: [], missed: [] },
     provider: 'mock',
     createdAt: new Date().toISOString(),
@@ -205,6 +206,117 @@ describe('sqlite 仓储', () => {
       assert.deepEqual(card?.keywords, { priority: [], hit: [], missed: [] });
     } finally {
       repo.close();
+    }
+  });
+
+  it('日程能被完整保存与读回', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      const card = makeCard({
+        schedule: {
+          start: '2025-03-05',
+          end: '2025-03-08',
+          dayCount: 4,
+          label: '3月5日至3月8日',
+          inferredYear: true,
+        },
+      });
+      repo.insert(card);
+      assert.deepEqual(repo.get(card.id)?.schedule, {
+        start: '2025-03-05',
+        end: '2025-03-08',
+        dayCount: 4,
+        label: '3月5日至3月8日',
+        inferredYear: true,
+      });
+    } finally {
+      repo.close();
+    }
+  });
+
+  it('解析不出日期的卡片读回 null 而不是报错', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      const card = makeCard({ schedule: null });
+      repo.insert(card);
+      assert.equal(repo.get(card.id)?.schedule, null);
+    } finally {
+      repo.close();
+    }
+  });
+
+  it('老数据库里能解析出日期的卡片会被自动回填排期', () => {
+    const dbPath = tempDbPath();
+    mkdirSync(path.dirname(dbPath), { recursive: true });
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE cards (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, time TEXT, source TEXT,
+        key_points TEXT NOT NULL, raw_text TEXT NOT NULL,
+        provider TEXT NOT NULL, created_at TEXT NOT NULL, seq INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    const insert = legacy.prepare(
+      `INSERT INTO cards (id, title, time, key_points, raw_text, provider, created_at, seq)
+       VALUES (?, ?, ?, '["要点"]', '原文', 'mock', ?, ?)`,
+    );
+    // 卡片的创建时间是 2026-09-20，用它推断年份应是 2026 而不是"现在"
+    insert.run('has-date', '有日期的老卡', '9月28日至9月30日', '2026-09-20T10:00:00.000Z', 1);
+    insert.run('no-date', '没日期的老卡', '待定', '2026-09-20T10:00:00.000Z', 2);
+    insert.run('null-time', '时间为空的老卡', null, '2026-09-20T10:00:00.000Z', 3);
+    legacy.close();
+
+    const repo = createSqliteCardRepository(dbPath);
+    try {
+      const scheduled = repo.get('has-date');
+      assert.equal(scheduled?.schedule?.start, '2026-09-28');
+      assert.equal(scheduled?.schedule?.end, '2026-09-30');
+      assert.equal(scheduled?.schedule?.dayCount, 3);
+
+      // 解析不出来的保持 null，但要标记为已算过
+      assert.equal(repo.get('no-date')?.schedule, null);
+      assert.equal(repo.get('null-time')?.schedule, null);
+    } finally {
+      repo.close();
+    }
+  });
+
+  it('回填只做一次：再次打开不会重复计算', () => {
+    const dbPath = tempDbPath();
+    mkdirSync(path.dirname(dbPath), { recursive: true });
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE cards (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, time TEXT, source TEXT,
+        key_points TEXT NOT NULL, raw_text TEXT NOT NULL,
+        provider TEXT NOT NULL, created_at TEXT NOT NULL, seq INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    legacy
+      .prepare(
+        `INSERT INTO cards (id, title, time, key_points, raw_text, provider, created_at, seq)
+         VALUES ('c1', '卡', '9月28日', '["要点"]', '原文', 'mock', '2026-09-20T10:00:00.000Z', 1)`,
+      )
+      .run();
+    legacy.close();
+
+    const first = createSqliteCardRepository(dbPath);
+    const initial = first.get('c1')?.schedule?.start;
+    first.close();
+
+    // 直接看数据库：回填后应标记为已算过，第二次打开不该再有待回填的行
+    const inspect = new DatabaseSync(dbPath);
+    const pending = inspect
+      .prepare(`SELECT COUNT(*) AS total FROM cards WHERE schedule_computed = 0`)
+      .get() as unknown as { total: number };
+    inspect.close();
+    assert.equal(Number(pending.total), 0, '回填后不应留下待处理行');
+
+    const second = createSqliteCardRepository(dbPath);
+    try {
+      assert.equal(second.get('c1')?.schedule?.start, initial, '再次打开结果一致');
+    } finally {
+      second.close();
     }
   });
 

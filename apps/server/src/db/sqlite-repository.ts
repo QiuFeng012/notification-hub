@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { CardKeywords, InfoCard, SummaryProvider } from '@notification-hub/shared';
+import type { CardKeywords, CardSchedule, InfoCard, SummaryProvider } from '@notification-hub/shared';
 import { DEFAULT_LIST_LIMIT, type CardRepository } from './repository.js';
+import { parseSchedule } from '../calendar/date-parser.js';
 
 /**
  * seq 是单调递增的插入序号，仅用于排序。
@@ -10,7 +11,8 @@ import { DEFAULT_LIST_LIMIT, type CardRepository } from './repository.js';
  * 只按 created_at 排序时顺序不确定（SQLite 可能按主键回退），
  * 因此用 (created_at DESC, seq DESC) 两级排序，保证"最新的排最前"是确定的。
  *
- * keywords 以 JSON 字符串存储，记录生成这张卡时用户填写的关注点。
+ * keywords 与 schedule 以 JSON 字符串存储：前者记录生成时的关注点，
+ * 后者是从 time 文本确定性解析出的日历排期（解析不出为 NULL）。
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS cards (
@@ -23,12 +25,13 @@ CREATE TABLE IF NOT EXISTS cards (
   provider    TEXT NOT NULL,
   created_at  TEXT NOT NULL,
   seq         INTEGER NOT NULL DEFAULT 0,
-  keywords    TEXT NOT NULL DEFAULT '{}'
+  keywords    TEXT NOT NULL DEFAULT '{}',
+  schedule    TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_cards_order ON cards (created_at DESC, seq DESC);
 `;
 
-/** 数据库里的一行；key_points 与 keywords 以 JSON 字符串存储 */
+/** 数据库里的一行；key_points / keywords / schedule 以 JSON 字符串存储 */
 interface CardRow {
   id: string;
   title: string;
@@ -39,6 +42,7 @@ interface CardRow {
   provider: string;
   created_at: string;
   keywords?: string | null;
+  schedule?: string | null;
 }
 
 const EMPTY_KEYWORDS: CardKeywords = { priority: [], hit: [], missed: [] };
@@ -77,6 +81,26 @@ function parseKeywords(raw: string | null | undefined): CardKeywords {
   }
 }
 
+/** 解析数据库里存的日程 JSON，缺失或损坏时返回 null */
+function parseStoredSchedule(raw: string | null | undefined): CardSchedule | null {
+  if (!raw) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    const record = parsed as Record<string, unknown>;
+    if (typeof record.start !== 'string' || typeof record.end !== 'string') return null;
+    return {
+      start: record.start,
+      end: record.end,
+      dayCount: typeof record.dayCount === 'number' ? record.dayCount : 1,
+      label: typeof record.label === 'string' ? record.label : '',
+      inferredYear: record.inferredYear === true,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function rowToCard(row: CardRow): InfoCard {
   return {
     id: row.id,
@@ -85,6 +109,7 @@ function rowToCard(row: CardRow): InfoCard {
     source: row.source,
     keyPoints: parseKeyPoints(row.key_points),
     rawText: row.raw_text,
+    schedule: parseStoredSchedule(row.schedule),
     keywords: parseKeywords(row.keywords),
     provider: toProvider(row.provider),
     createdAt: row.created_at,
@@ -92,15 +117,29 @@ function rowToCard(row: CardRow): InfoCard {
 }
 
 /**
- * 轻量迁移：老数据库里没有 keywords 列，补上。
+ * 轻量迁移：给老数据库补上没有的列。
  * SQLite 没有 "ADD COLUMN IF NOT EXISTS"，所以先查表结构再决定加不加。
- * 不做通用迁移框架——目前只有这一处，等真有第二处再抽象。
+ * 不做通用迁移框架——目前只有三处，等真有第五处再抽象。
+ *
+ * schedule_computed 是刻意加的一列：schedule 为 NULL 有两种含义——
+ * "算过但解析不出日期" 与 "还没算过（老数据）"。没有这个标记就无法区分，
+ * 会导致老卡片永远进不了日历，或者每次启动都把所有卡片重算一遍。
  */
 function migrate(db: DatabaseSync): void {
   const columns = db.prepare(`PRAGMA table_info(cards)`).all() as unknown as Array<{ name: string }>;
-  const hasKeywords = columns.some((column) => column.name === 'keywords');
-  if (!hasKeywords) {
+  const has = (name: string) => columns.some((column) => column.name === name);
+
+  if (!has('keywords')) {
     db.exec(`ALTER TABLE cards ADD COLUMN keywords TEXT NOT NULL DEFAULT '{}'`);
+  }
+  if (!has('schedule')) {
+    // 可空：老卡片没有排期，解析不出来时也是 NULL
+    db.exec(`ALTER TABLE cards ADD COLUMN schedule TEXT`);
+  }
+  if (!has('schedule_computed')) {
+    // 已有 schedule 的都是新数据（算过），老数据默认为 0 等着回填
+    db.exec(`ALTER TABLE cards ADD COLUMN schedule_computed INTEGER NOT NULL DEFAULT 0`);
+    db.exec(`UPDATE cards SET schedule_computed = 1 WHERE schedule IS NOT NULL`);
   }
 }
 
@@ -122,10 +161,39 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
   // 单用户本地应用 + node:sqlite 同步 API，不存在并发插入，MAX(seq)+1 是安全的
   const nextSeqStmt = db.prepare(`SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM cards`);
   const insertStmt = db.prepare(
-    `INSERT INTO cards (id, title, time, source, key_points, raw_text, provider, created_at, seq, keywords)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO cards (id, title, time, source, key_points, raw_text, provider, created_at, seq, keywords, schedule, schedule_computed)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
   );
   const deleteStmt = db.prepare(`DELETE FROM cards WHERE id = ?`);
+
+  /**
+   * 回填历史卡片的排期。
+   *
+   * 日历功能上线前创建的卡片 schedule 是 NULL。如果不回填，
+   * 这些"老卡片"永远进不了日历，而这跟"解析不出日期"在界面上长得一样，
+   * 用户会以为功能坏了。
+   *
+   * 锚点用卡片自己的创建时间，而不是"现在"——否则相对日期（今天/明天）
+   * 会被按今天重新解释，把历史排期算到错误的日子上。
+   * 算不出来也标记为已算过，避免每次启动重复劳动。
+   */
+  function backfillSchedules(): void {
+    const pending = db
+      .prepare(`SELECT id, time, created_at FROM cards WHERE schedule_computed = 0`)
+      .all() as unknown as Array<{ id: string; time: string | null; created_at: string }>;
+    if (pending.length === 0) return;
+
+    const update = db.prepare(`UPDATE cards SET schedule = ?, schedule_computed = 1 WHERE id = ?`);
+    for (const row of pending) {
+      const anchor = new Date(row.created_at);
+      const schedule = parseSchedule(row.time, {
+        anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,
+      });
+      update.run(schedule ? JSON.stringify(schedule) : null, row.id);
+    }
+  }
+
+  backfillSchedules();
 
   return {
     list(limit = DEFAULT_LIST_LIMIT) {
@@ -157,6 +225,7 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
         card.createdAt,
         Number(next),
         JSON.stringify(card.keywords),
+        card.schedule ? JSON.stringify(card.schedule) : null,
       );
       return card;
     },

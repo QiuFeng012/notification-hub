@@ -1,10 +1,13 @@
-import type {
-  CardListResponse,
-  InfoCard,
-  SettingsSource,
-  SettingsView,
-  UpdateSettingsRequest,
-  UpdateSettingsResponse,
+import {
+  DEFAULT_HIGHLIGHT_STYLE,
+  HEX_COLOR_PATTERN,
+  type CardListResponse,
+  type HighlightStyle,
+  type InfoCard,
+  type SettingsSource,
+  type SettingsView,
+  type UpdateSettingsRequest,
+  type UpdateSettingsResponse,
 } from '@notification-hub/shared';
 import { toCardView, type CardView } from './card-view';
 
@@ -117,6 +120,31 @@ export function toSettingsView(input: unknown): SettingsView {
     source,
     baseUrl: typeof record.baseUrl === 'string' ? record.baseUrl : '',
     model: typeof record.model === 'string' ? record.model : '',
+    highlight: toHighlightStyle(record.highlight),
+  };
+}
+
+/** 荧光笔配置的归一化：非法颜色丢弃，缺项补默认值，永不抛错 */
+export function toHighlightStyle(input: unknown): HighlightStyle {
+  const record = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>;
+  const toColor = (value: unknown): string | null =>
+    typeof value === 'string' && HEX_COLOR_PATTERN.test(value.trim()) ? value.trim().toLowerCase() : null;
+
+  const paletteRaw = Array.isArray(record.multiDayPalette) ? record.multiDayPalette : [];
+  const palette = paletteRaw.map((item) => toColor(item)).filter((item): item is string => item !== null);
+
+  const perCard: Record<string, string> = {};
+  if (typeof record.perCard === 'object' && record.perCard !== null) {
+    for (const [cardId, value] of Object.entries(record.perCard as Record<string, unknown>)) {
+      const color = toColor(value);
+      if (color) perCard[cardId] = color;
+    }
+  }
+
+  return {
+    singleDay: toColor(record.singleDay) ?? DEFAULT_HIGHLIGHT_STYLE.singleDay,
+    multiDayPalette: palette.length > 0 ? palette : [...DEFAULT_HIGHLIGHT_STYLE.multiDayPalette],
+    perCard,
   };
 }
 

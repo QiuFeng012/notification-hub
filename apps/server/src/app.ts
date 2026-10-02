@@ -7,6 +7,7 @@ import type { CardService } from './services/card-service.js';
 import { ValidationError } from './services/card-service.js';
 import type { SettingsService } from './services/settings-service.js';
 import { SettingsValidationError } from './services/settings-service.js';
+import type { SettingsPatch } from './settings/settings-store.js';
 
 export interface BuildAppOptions {
   cardService: CardService;
@@ -71,8 +72,13 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     app.get('/api/settings', async () => settingsService.get());
 
     app.put('/api/settings', async (request) => {
-      const body = (request.body ?? {}) as { apiKey?: unknown; baseUrl?: unknown; model?: unknown };
-      const patch: { apiKey?: string; baseUrl?: string; model?: string } = {};
+      const body = (request.body ?? {}) as {
+        apiKey?: unknown;
+        baseUrl?: unknown;
+        model?: unknown;
+        highlight?: unknown;
+      };
+      const patch: SettingsPatch = {};
 
       for (const field of ['apiKey', 'baseUrl', 'model'] as const) {
         const value = body[field];
@@ -81,6 +87,15 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
           throw new ValidationError('INVALID_BODY', `${field} 必须是字符串`);
         }
         patch[field] = value;
+      }
+
+      // 颜色的具体校验在 settings-store 里做（只接受 #RRGGBB，非法值丢弃）；
+      // 这里只保证形状是对象，避免把裸值丢给下游。
+      if (body.highlight !== undefined) {
+        if (typeof body.highlight !== 'object' || body.highlight === null) {
+          throw new ValidationError('INVALID_BODY', 'highlight 必须是对象');
+        }
+        patch.highlight = body.highlight as SettingsPatch['highlight'];
       }
 
       // 保存前会真实调用一次模型接口验证 Key，见 settings-service

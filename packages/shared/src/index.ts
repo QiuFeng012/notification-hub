@@ -1,3 +1,27 @@
+import type { CardSchedule, HighlightStyle } from './calendar.js';
+
+// 只再导出类型。不能用 `export *`——那会生成运行时 import，
+// 而共享包只有 .ts 源码，编译后的服务端找不到 './calendar.js'。
+export type { CardSchedule, HighlightStyle } from './calendar.js';
+
+/** 内置默认荧光笔配色：数量少、区分度高，且在米白底上都能看清 */
+export const DEFAULT_HIGHLIGHT_STYLE: HighlightStyle = {
+  singleDay: '#b4643f',
+  multiDayPalette: ['#b4643f', '#4a7c8c', '#8a6d3b', '#7a5c8e', '#4f7a52', '#a05252'],
+  perCard: {},
+};
+
+/** 颜色只接受 #RRGGBB，避免把任意字符串塞进 style 里 */
+export const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+
+/** 最多允许几个调色板颜色，防止配置无限膨胀 */
+export const MAX_PALETTE_SIZE = 12;
+
+/** 卡片日程是否需要荧光笔标记：两天及以上 */
+export function needsHighlight(dayCount: number): boolean {
+  return dayCount >= 2;
+}
+
 /**
  * 关键词命中情况：这张卡是否覆盖了用户当次填写的关注点。
  *
@@ -33,6 +57,11 @@ export interface InfoCard {
   keyPoints: string[];
   /** 原始通知原文，一并存档，便于核对 AI 是否漏信息 */
   rawText: string;
+  /**
+   * 日历排期。服务端从 time 文本确定性解析得来；
+   * 解析不出则为 null，日历上不显示这张卡，而不是猜一个日期放上去。
+   */
+  schedule: CardSchedule | null;
   /**
    * 生成时的关注点记录。存的是"我当时在关注什么"，不是长期配置，
    * 所以日后回看能知道这条卡为什么是现在这个样子。
@@ -143,6 +172,8 @@ export interface SettingsView {
   baseUrl: string;
   /** 生效的模型名 */
   model: string;
+  /** 日历荧光笔颜色配置 */
+  highlight: HighlightStyle;
 }
 
 /** PUT /api/settings 的请求体：只传要改的字段，未传的保持不变 */
@@ -151,6 +182,17 @@ export interface UpdateSettingsRequest {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  /**
+   * 日历荧光笔颜色。只传要改的字段即可：
+   *   { singleDay }                  改单日颜色
+   *   { multiDayPalette }            换整套多日调色板
+   *   { perCard: { cardId: '#...' } } 指定某张卡片的颜色（value 传 null 表示取消指定）
+   */
+  highlight?: {
+    singleDay?: string;
+    multiDayPalette?: string[];
+    perCard?: Record<string, string | null>;
+  };
 }
 
 /** PUT /api/settings 的响应：保存后的设置，加上一条可选提示 */

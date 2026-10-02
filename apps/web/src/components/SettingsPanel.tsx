@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { MAX_API_KEY_LENGTH } from '@notification-hub/shared';
-import type { SettingsView } from '@notification-hub/shared';
+import type { SettingsView, UpdateSettingsRequest } from '@notification-hub/shared';
 
 interface SettingsPanelProps {
   settings: SettingsView | null;
   loading: boolean;
   saving: boolean;
-  onSave: (patch: { apiKey?: string; baseUrl?: string; model?: string }) => Promise<boolean>;
+  onSave: (patch: UpdateSettingsRequest) => Promise<boolean>;
   onClear: () => Promise<void>;
 }
 
@@ -49,7 +49,7 @@ export function SettingsPanel({ settings, loading, saving, onSave, onClear }: Se
   async function handleSave() {
     if (!canSave) return;
     // apiKey 只在用户真的输入了内容时才提交，留空表示"保持原样"
-    const patch: { apiKey?: string; baseUrl?: string; model?: string } = {
+    const patch: UpdateSettingsRequest = {
       baseUrl: baseUrl.trim(),
       model: model.trim(),
     };

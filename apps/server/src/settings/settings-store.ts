@@ -1,13 +1,24 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { MAX_API_KEY_LENGTH, MAX_BASE_URL_LENGTH, MAX_MODEL_LENGTH, type SettingsSource, type SettingsView } from '@notification-hub/shared';
+import {
+  DEFAULT_HIGHLIGHT_STYLE,
+  HEX_COLOR_PATTERN,
+  MAX_API_KEY_LENGTH,
+  MAX_BASE_URL_LENGTH,
+  MAX_MODEL_LENGTH,
+  MAX_PALETTE_SIZE,
+  type HighlightStyle,
+  type SettingsSource,
+  type SettingsView,
+} from '@notification-hub/shared';
 
 /** 落盘结构。apiKey 是明文——这是本机个人应用，必须依赖文件权限而非加密。 */
 interface PersistedSettings {
   apiKey?: string;
   baseUrl?: string;
   model?: string;
+  highlight?: HighlightStyle;
 }
 
 export interface ResolvedSettings {
@@ -28,17 +39,91 @@ export interface SettingsStoreOptions {
   defaultModel: string;
 }
 
+export interface SettingsPatch {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+  highlight?: {
+    singleDay?: string;
+    multiDayPalette?: string[];
+    perCard?: Record<string, string | null>;
+  };
+}
+
 export interface SettingsStore {
   /** 解析当前生效的设置：用户配置 > 环境变量 > 无 */
   resolve(): ResolvedSettings;
   /** 供界面展示的视图，Key 只给掩码 */
   view(): SettingsView;
   /** 合并保存；apiKey 传空字符串表示清除 */
-  save(patch: { apiKey?: string; baseUrl?: string; model?: string }): SettingsView;
+  save(patch: SettingsPatch): SettingsView;
   /** 清除用户保存的配置（回落到环境变量或 mock） */
   clear(): SettingsView;
   /** 用户是否保存过配置 */
   hasUserConfig(): boolean;
+}
+
+/** 校验一个颜色值；非法返回 null */
+export function normalizeColor(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return HEX_COLOR_PATTERN.test(trimmed) ? trimmed.toLowerCase() : null;
+}
+
+/** 归一化荧光笔配置：非法项丢弃，缺项补默认值，永不抛错 */
+function normalizeHighlight(input: unknown): HighlightStyle | undefined {
+  if (typeof input !== 'object' || input === null) return undefined;
+  const record = input as Record<string, unknown>;
+
+  const singleDay = normalizeColor(record.singleDay);
+  const paletteRaw = Array.isArray(record.multiDayPalette) ? record.multiDayPalette : null;
+  const palette = paletteRaw
+    ? paletteRaw
+        .map((item) => normalizeColor(item))
+        .filter((item): item is string => item !== null)
+        .slice(0, MAX_PALETTE_SIZE)
+    : null;
+
+  const perCard: Record<string, string> = {};
+  if (typeof record.perCard === 'object' && record.perCard !== null) {
+    for (const [cardId, value] of Object.entries(record.perCard as Record<string, unknown>)) {
+      const color = normalizeColor(value);
+      if (color) perCard[cardId] = color;
+    }
+  }
+
+  const hasAny = singleDay !== null || (palette?.length ?? 0) > 0 || Object.keys(perCard).length > 0;
+  if (!hasAny) return undefined;
+
+  return {
+    singleDay: singleDay ?? DEFAULT_HIGHLIGHT_STYLE.singleDay,
+    multiDayPalette: palette && palette.length > 0 ? palette : [...DEFAULT_HIGHLIGHT_STYLE.multiDayPalette],
+    perCard,
+  };
+}
+
+/** 合并调色板：只替换用户真正给出的部分，其余保留 */
+function mergeHighlight(current: HighlightStyle | undefined, patch: SettingsPatch['highlight']): HighlightStyle | undefined {
+  if (!patch) return current;
+  const base: HighlightStyle = current ?? {
+    singleDay: DEFAULT_HIGHLIGHT_STYLE.singleDay,
+    multiDayPalette: [...DEFAULT_HIGHLIGHT_STYLE.multiDayPalette],
+    perCard: {},
+  };
+
+  const normalized = normalizeHighlight({
+    singleDay: patch.singleDay ?? base.singleDay,
+    multiDayPalette: patch.multiDayPalette ?? base.multiDayPalette,
+    perCard: { ...base.perCard, ...(patch.perCard ?? {}) },
+  });
+
+  if (!normalized) return undefined;
+
+  // perCard 里传 null 表示"取消对这张卡的单独指定"
+  for (const [cardId, value] of Object.entries(patch.perCard ?? {})) {
+    if (value === null) delete normalized.perCard[cardId];
+  }
+  return normalized;
 }
 
 /** 把 Key 变成 "sk-1234…cdef" 形式，足够辨认是不是自己那把，又不泄露全文 */
@@ -89,6 +174,8 @@ function readPersisted(filePath: string): PersistedSettings {
     if (typeof record.model === 'string' && record.model.trim().length > 0) {
       result.model = record.model.trim();
     }
+    const highlight = normalizeHighlight(record.highlight);
+    if (highlight) result.highlight = highlight;
     return result;
   } catch {
     // 文件损坏时按"没有用户配置"处理，不要因为一个坏文件让整个应用起不来
@@ -147,6 +234,11 @@ export function createSettingsStore(options: SettingsStoreOptions): SettingsStor
       source: resolved.source,
       baseUrl: persisted.baseUrl ?? defaultBaseUrl,
       model: persisted.model ?? defaultModel,
+      highlight: persisted.highlight ?? {
+        singleDay: DEFAULT_HIGHLIGHT_STYLE.singleDay,
+        multiDayPalette: [...DEFAULT_HIGHLIGHT_STYLE.multiDayPalette],
+        perCard: {},
+      },
     };
   }
 
@@ -177,6 +269,11 @@ export function createSettingsStore(options: SettingsStoreOptions): SettingsStor
         const model = assertLength(patch.model, MAX_MODEL_LENGTH, '模型名');
         if (model.length === 0) delete next.model;
         else next.model = model;
+      }
+      if (patch.highlight !== undefined) {
+        const merged = mergeHighlight(current.highlight, patch.highlight);
+        if (merged) next.highlight = merged;
+        else delete next.highlight;
       }
 
       writePersisted(filePath, next);

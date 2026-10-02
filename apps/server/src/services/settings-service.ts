@@ -1,7 +1,7 @@
 import type { SettingsView, UpdateSettingsResponse } from '@notification-hub/shared';
 import { validateApiKey } from '../ai/validate-api-key.js';
 import { InvalidApiKeyError } from '../ai/types.js';
-import type { SettingsStore } from '../settings/settings-store.js';
+import type { SettingsStore, SettingsPatch } from '../settings/settings-store.js';
 
 /** 设置相关的业务错误，由 HTTP 层映射成 400 */
 export class SettingsValidationError extends Error {
@@ -28,7 +28,7 @@ const DEFAULT_VALIDATION_TIMEOUT_MS = 15_000;
 
 export interface SettingsService {
   get(): SettingsView;
-  update(patch: { apiKey?: string; baseUrl?: string; model?: string }): Promise<UpdateSettingsResponse>;
+  update(patch: SettingsPatch): Promise<UpdateSettingsResponse>;
   clear(): SettingsView;
 }
 

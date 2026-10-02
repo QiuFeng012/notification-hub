@@ -1,4 +1,4 @@
-import type { CardKeywords, InfoCard } from '@notification-hub/shared';
+import type { CardKeywords, CardSchedule, InfoCard } from '@notification-hub/shared';
 
 /** 信息卡在界面上的形态：时间与要点列表已归一化，时间戳已格式化为可读中文 */
 export interface CardView {
@@ -10,6 +10,8 @@ export interface CardView {
   source: string | null;
   keyPoints: string[];
   rawText: string;
+  /** 日历排期；服务端解析不出日期时为 null，日历上不显示这张卡 */
+  schedule: CardSchedule | null;
   /** 生成时的关注点记录，用于在卡片上标出"含你关注的" */
   keywords: CardKeywords;
   provider: InfoCard['provider'];
@@ -42,10 +44,27 @@ export function toCardView(input: unknown): CardView | null {
     source: nonEmptyString(card.source),
     keyPoints,
     rawText: typeof card.rawText === 'string' ? card.rawText : '',
+    schedule: toSchedule(card.schedule),
     keywords: toKeywords(card.keywords),
     provider: card.provider === 'deepseek' ? 'deepseek' : 'mock',
     createdAt: typeof card.createdAt === 'string' ? card.createdAt : '',
     createdAtLabel: formatTimestamp(card.createdAt),
+  };
+}
+
+/** 日程的归一化：起始日期不合法就当作没有排期，避免把坏数据铺进日历 */
+function toSchedule(input: unknown): CardSchedule | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const record = input as Record<string, unknown>;
+  const start = nonEmptyString(record.start);
+  const end = nonEmptyString(record.end);
+  if (!start || !end) return null;
+  return {
+    start,
+    end,
+    dayCount: typeof record.dayCount === 'number' && record.dayCount > 0 ? record.dayCount : 1,
+    label: typeof record.label === 'string' ? record.label : '',
+    inferredYear: record.inferredYear === true,
   };
 }
 

@@ -1,26 +1,38 @@
-import { useMemo } from 'react';
+import { DEFAULT_HIGHLIGHT_STYLE } from '@notification-hub/shared';
+import { useMemo, useState } from 'react';
+import { CalendarView } from './components/CalendarView';
 import { CardList } from './components/CardList';
 import { IngestForm } from './components/IngestForm';
 import { SettingsPanel } from './components/SettingsPanel';
 import { useCards } from './hooks/useCards';
 import { useSettings } from './hooks/useSettings';
 import { createCardApi, createSettingsApi } from './lib/api';
+import { toIsoDate } from './lib/date';
+
+type ViewMode = 'cards' | 'calendar';
 
 /**
- * 应用外壳：左侧输入栏 + API 设置，右侧信息卡时间流。
+ * 应用外壳：左侧输入栏 + API 设置，右侧在「卡片列表」与「日历视图」间切换。
  * 通过 props 传入 api 是为了在组件测试里注入替身，无需真的发请求。
  */
 export interface AppProps {
   api?: ReturnType<typeof createCardApi>;
   settingsApi?: ReturnType<typeof createSettingsApi>;
+  /** 今天，格式 YYYY-MM-DD；注入是为了让日历相关测试结果确定 */
+  today?: string;
 }
 
-export default function App({ api, settingsApi }: AppProps = {}) {
+export default function App({ api, settingsApi, today }: AppProps = {}) {
   const cardApi = useMemo(() => api ?? createCardApi(), [api]);
   const settingsClient = useMemo(() => settingsApi ?? createSettingsApi(), [settingsApi]);
 
   const { cards, loading, submitting, error, dismissError, submit, remove } = useCards(cardApi);
   const settings = useSettings(settingsClient);
+  const [view, setView] = useState<ViewMode>('cards');
+
+  const todayIso = today ?? toIsoDate(new Date());
+  const highlight = settings.settings?.highlight ?? DEFAULT_HIGHLIGHT_STYLE;
+  const scheduledCount = cards.filter((card) => card.schedule !== null).length;
 
   // 两类提示共用一个位置：错误优先，其次是保存结果
   const message = error ?? settings.error ?? settings.notice;
@@ -39,7 +51,9 @@ export default function App({ api, settingsApi }: AppProps = {}) {
           <h1 className="app__title">信息整合台</h1>
           <p className="app__subtitle">粘贴通知 → AI 提炼要点 → 生成信息卡，数据只存在本机</p>
         </div>
-        <span className="app__badge">{loading ? '—' : `${cards.length} 张卡`}</span>
+        <span className="app__badge">
+          {loading ? '—' : view === 'calendar' ? `${scheduledCount} 条有日期` : `${cards.length} 张卡`}
+        </span>
       </header>
 
       {message ? (
@@ -69,9 +83,42 @@ export default function App({ api, settingsApi }: AppProps = {}) {
           <IngestForm submitting={submitting} onSubmit={submit} />
         </section>
 
-        <section className="panel panel--list" aria-label="信息卡列表">
-          <h2 className="panel__title">信息卡</h2>
-          <CardList cards={cards} loading={loading} onDelete={remove} />
+        <section className="panel panel--list" aria-label={view === 'calendar' ? '日历视图' : '信息卡列表'}>
+          <div className="view-switch">
+            <h2 className="panel__title">信息卡</h2>
+            <div className="view-switch__tabs" role="tablist" aria-label="视图切换">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={view === 'cards'}
+                className={view === 'cards' ? 'view-tab view-tab--active' : 'view-tab'}
+                onClick={() => setView('cards')}
+              >
+                卡片列表
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={view === 'calendar'}
+                className={view === 'calendar' ? 'view-tab view-tab--active' : 'view-tab'}
+                onClick={() => setView('calendar')}
+              >
+                日历视图
+              </button>
+            </div>
+          </div>
+
+          {view === 'cards' ? (
+            <CardList cards={cards} loading={loading} onDelete={remove} />
+          ) : (
+            <CalendarView
+              cards={cards}
+              loading={loading}
+              highlight={highlight}
+              onSaveHighlight={settings.save}
+              today={todayIso}
+            />
+          )}
         </section>
       </main>
     </div>

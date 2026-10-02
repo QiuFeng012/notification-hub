@@ -3,11 +3,21 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "前后端共享的信息卡类型定义",
+  "description": "前后端共享的信息卡与日历类型、以及少量共享常量",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

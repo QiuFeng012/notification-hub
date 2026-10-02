@@ -20,6 +20,12 @@ function readArg(name: string, fallback: string): string {
 const appUrl = readArg('url', 'http://127.0.0.1:5178').replace(/\/+$/, '');
 const outPath = path.resolve(readArg('out', 'screenshot.png'));
 const clickText = readArg('click', '');
+/**
+ * 在点击之后、截图之前执行的任意 JS，用于翻月份之类的准备动作。
+ * 脚本稍长就会被 shell 的引号转义拆坏，所以优先用 --js-file 从文件读。
+ */
+const jsFile = readArg('js-file', '');
+const evalScript = jsFile ? fs.readFileSync(jsFile, 'utf8') : readArg('js', '');
 const width = Number(readArg('width', '1280'));
 const height = Number(readArg('height', '900'));
 const cdpPort = Number(readArg('port', '9333'));
@@ -138,6 +144,18 @@ async function main(): Promise<void> {
       process.exitCode = 1;
     }
     await sleep(700);
+  }
+
+  if (evalScript) {
+    const result = await cdp.send<{ result: { value: unknown } }>('Runtime.evaluate', {
+      expression: evalScript,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    if (result.result.value !== undefined && result.result.value !== null) {
+      console.log(`脚本返回：${JSON.stringify(result.result.value)}`);
+    }
+    await sleep(800);
   }
 
   const shot = await cdp.send<{ data: string }>('Page.captureScreenshot', { format: 'png' });

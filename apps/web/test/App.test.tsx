@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_HIGHLIGHT_STYLE } from '@notification-hub/shared';
 import type { SettingsView } from '@notification-hub/shared';
 import App from '../src/App';
 import { ApiError, type CardApi, type SettingsApi } from '../src/lib/api';
@@ -14,6 +15,7 @@ function makeCard(overrides: Partial<CardView> = {}): CardView {
     source: '教务处',
     keyPoints: ['3月5日14:00开放选课', '3月8日24:00前完成'],
     rawText: '【教务处】选课通知原文',
+    schedule: null,
     keywords: { priority: [], hit: [], missed: [] },
     provider: 'deepseek',
     createdAt: '2025-03-05T06:32:00.000Z',
@@ -29,6 +31,7 @@ function makeSettings(overrides: Partial<SettingsView> = {}): SettingsView {
     source: 'mock',
     baseUrl: 'https://api.deepseek.com',
     model: 'deepseek-chat',
+    highlight: { ...DEFAULT_HIGHLIGHT_STYLE, multiDayPalette: [...DEFAULT_HIGHLIGHT_STYLE.multiDayPalette], perCard: {} },
     ...overrides,
   };
 }
