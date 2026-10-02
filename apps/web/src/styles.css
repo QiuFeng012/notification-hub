@@ -413,39 +413,152 @@ body {
   height: 16px;
 }
 
-/* 多日调色板：整体显示当前色，悬停时向右展开候选色 */
-.swatch--palette {
-  position: relative;
-  width: 20px;
-  height: 20px;
+/* 当前颜色：点它打开 RGB 色盘 */
+.swatch--current {
+  width: 26px;
+  height: 26px;
+  border-color: var(--border-strong);
+}
+
+.swatch--current:hover {
+  border-color: var(--accent);
+}
+
+/* ---------- RGB 色盘 ---------- */
+
+.rgb-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+
+.rgb-picker__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rgb-picker__swatch {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.rgb-picker__hex {
+  width: 92px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.rgb-picker__hex:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.rgb-picker__hex--error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.rgb-picker__channel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.rgb-picker__channel-name {
+  width: 12px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* 滑轨背景用该通道 0→255 的渐变，一眼看出拖的是哪个通道 */
+.rgb-picker__range {
+  flex: 1;
+  height: 6px;
+  margin: 0;
+  border-radius: 999px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
+
+.rgb-picker__range::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--bg-elevated);
   border-radius: 50%;
-  box-shadow: inset 0 0 0 1px rgba(51, 48, 42, 0.12);
+  background: var(--text);
+  box-shadow: 0 0 0 1px var(--border-strong);
+  cursor: pointer;
 }
 
-.swatch__option {
-  position: absolute;
-  top: 24px;
-  display: none;
-  width: 16px;
-  height: 16px;
-  z-index: 3;
+.rgb-picker__range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--bg-elevated);
+  border-radius: 50%;
+  background: var(--text);
+  cursor: pointer;
 }
 
-.swatch--palette:hover .swatch__option {
-  display: block;
+.rgb-picker__number {
+  width: 52px;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: right;
 }
 
-.swatch--palette:hover .swatch__option:nth-child(1) { left: 0; }
-.swatch--palette:hover .swatch__option:nth-child(2) { left: 20px; }
-.swatch--palette:hover .swatch__option:nth-child(3) { left: 40px; }
-.swatch--palette:hover .swatch__option:nth-child(4) { left: 60px; }
-.swatch--palette:hover .swatch__option:nth-child(5) { left: 80px; }
-.swatch--palette:hover .swatch__option:nth-child(6) { left: 100px; }
-.swatch--palette:hover .swatch__option:nth-child(7) { left: 120px; }
-.swatch--palette:hover .swatch__option:nth-child(8) { left: 140px; }
-.swatch--palette:hover .swatch__option:nth-child(9) { left: 160px; }
-.swatch--palette:hover .swatch__option:nth-child(10) { left: 180px; }
+.rgb-picker__number:focus {
+  outline: none;
+  border-color: var(--accent);
+}
 
+.calendar__colors-value {
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.calendar__colors-editor {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.calendar__colors-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
 .calendar__notice {
   margin: 0;
   padding: 8px 12px;

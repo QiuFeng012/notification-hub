@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import type { HighlightStyle, UpdateSettingsRequest } from '@notification-hub/shared';
+import { RgbColorPicker } from './RgbColorPicker';
 import type { CardView } from '../lib/card-view';
+import { readableTextColor } from '../lib/color';
 import {
   buildMonthWeeks,
   CALENDAR_COLUMNS,
@@ -15,11 +17,20 @@ import {
 
 const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
 
-/** 可选的荧光笔颜色；数量刻意有限，避免变成调色板选择困难 */
-const COLOR_SWATCHES = [
+/**
+ * 常用的起始色，仅作为"快捷起点"。
+ * 颜色本身完全可自定义：点任意一个色块都会展开 RGB 色盘与 R/G/B 滑条。
+ */
+const COLOR_PRESETS = [
   '#b4643f', '#4a7c8c', '#8a6d3b', '#7a5c8e', '#4f7a52',
   '#a05252', '#3f6f9c', '#8c5a72', '#5d6b3a', '#7a7a7a',
 ];
+
+/** 色盘当前在调哪个颜色 */
+type ColorSlot =
+  | { kind: 'single' }
+  | { kind: 'multi'; index: number }
+  | { kind: 'card'; cardId: string };
 
 interface CalendarViewProps {
   cards: CardView[];
@@ -58,6 +69,41 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
   const [showColorPanel, setShowColorPanel] = useState(false);
+  /** 颜色面板里正在用色盘细调哪个颜色 */
+  const [editingSlot, setEditingSlot] = useState<ColorSlot | null>(null);
+  /**
+   * 拖动滑条时的实时预览色（hex → 颜色），只用于渲染，不落盘。
+   * 松手后才写入设置——否则拖一次会往接口打几十个请求。
+   */
+  const [previewColors, setPreviewColors] = useState<Record<string, string>>({});
+
+  /** 把预览色叠到已保存配置上，得到"当前该怎么画" */
+  const styleForRender = useMemo(() => {
+    const next: HighlightStyle = {
+      singleDay: previewColors.single ?? highlight.singleDay,
+      multiDayPalette: highlight.multiDayPalette.map((color, index) => previewColors[`multi-${index}`] ?? color),
+      perCard: { ...highlight.perCard },
+    };
+    for (const card of cards) {
+      const previewed = previewColors[`card-${card.id}`];
+      if (previewed) next.perCard[card.id] = previewed;
+    }
+    return next;
+  }, [highlight, previewColors, cards]);
+
+  function previewColor(key: string, hex: string) {
+    setPreviewColors((current) => ({ ...current, [key]: hex }));
+  }
+
+  /** 保存成功后清掉对应预览色，让它回到"以服务端为准" */
+  async function commitColor(key: string, patch: UpdateSettingsRequest) {
+    await onSaveHighlight(patch);
+    setPreviewColors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }
 
   const weeks = useMemo(
     () => buildMonthWeeks({ year: cursor.year, month: cursor.month, today, cards }),
@@ -85,13 +131,37 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
     setSelectedDate(today);
   }
 
-  async function setCardColor(cardId: string, color: string | null) {
-    await onSaveHighlight({ highlight: { perCard: { [cardId]: color } } });
-    setEditingCardId(null);
+  /** 某个色盘槽位对应的预览键；每个槽位独立，避免互相覆盖 */
+  function slotPreviewKey(slot: ColorSlot): string {
+    if (slot.kind === 'single') return 'single';
+    if (slot.kind === 'multi') return `multi-${slot.index}`;
+    return `card-${slot.cardId}`;
+  }
+
+  /** 色盘当前应显示的颜色（优先取拖动中的预览色） */
+  function currentSlotColor(slot: ColorSlot, style: HighlightStyle): string {
+    if (slot.kind === 'single') return style.singleDay;
+    if (slot.kind === 'multi') return style.multiDayPalette[slot.index] ?? style.singleDay;
+    return style.perCard[slot.cardId] ?? style.singleDay;
+  }
+
+  /** 把色盘选中的颜色写进设置 */
+  async function commitSlotColor(slot: ColorSlot, hex: string) {
+    if (slot.kind === 'single') {
+      await commitColor('single', { highlight: { singleDay: hex } });
+      return;
+    }
+    if (slot.kind === 'multi') {
+      const next = [...highlight.multiDayPalette];
+      next[slot.index] = hex;
+      await commitColor(`multi-${slot.index}`, { highlight: { multiDayPalette: next } });
+      return;
+    }
+    await commitColor(`card-${slot.cardId}`, { highlight: { perCard: { [slot.cardId]: hex } } });
   }
 
   function renderSpan(span: ScheduleSpan<CardView>, week: CalendarWeek<CardView>) {
-    const color = resolveCardColor(span.card, highlight);
+    const color = resolveCardColor(span.card, styleForRender);
     const isMulti = (span.card.schedule?.dayCount ?? 1) >= 2;
     // 圆只画在"区间真正开始/结束的那一天"。
     // 刻意不看列下标：从上周延续过来的段即使落在第 1 列，也不是起点，
@@ -122,7 +192,9 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
         {/* 起始圆：区间从更早的周延续过来时不画，改为平头，示意还没结束 */}
         <span className={showStart ? 'span__cap span__cap--start' : 'span__edge span__edge--start'} />
         <span className="span__bar">
-          <span className="span__label">{span.card.title}</span>
+          <span className="span__label" style={{ color: readableTextColor(color) }}>
+            {span.card.title}
+          </span>
         </span>
         <span className={showEnd ? 'span__cap span__cap--end' : 'span__edge span__edge--end'} />
       </button>
@@ -160,42 +232,79 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
         <div className="calendar__colors">
           <div className="calendar__colors-row">
             <span className="calendar__colors-label">单日</span>
-            {COLOR_SWATCHES.map((color) => (
+            <button
+              type="button"
+              className="swatch swatch--current"
+              style={{ background: styleForRender.singleDay }}
+              aria-label="编辑单日颜色"
+              onClick={() => setEditingSlot({ kind: 'single' })}
+            />
+            <span className="calendar__colors-value">{styleForRender.singleDay}</span>
+          </div>
+
+          <div className="calendar__colors-row">
+            <span className="calendar__colors-label">多日</span>
+            {styleForRender.multiDayPalette.map((color, index) => (
               <button
-                key={`single-${color}`}
+                key={`palette-${index}`}
                 type="button"
-                className={highlight.singleDay === color ? 'swatch swatch--active' : 'swatch'}
+                className="swatch swatch--current"
                 style={{ background: color }}
-                aria-label={`单日颜色 ${color}`}
-                onClick={() => void onSaveHighlight({ highlight: { singleDay: color } })}
+                aria-label={`编辑第 ${index + 1} 个多日颜色`}
+                onClick={() => setEditingSlot({ kind: 'multi', index })}
               />
             ))}
           </div>
-          <div className="calendar__colors-row">
-            <span className="calendar__colors-label">多日</span>
-            {highlight.multiDayPalette.map((color, index) => (
-              <span key={`palette-${index}`} className="swatch swatch--palette" style={{ background: color }}>
-                {COLOR_SWATCHES.map((candidate) => (
+
+          {editingSlot ? (
+            <div className="calendar__colors-editor">
+              <div className="calendar__colors-editor-head">
+                <span className="calendar__colors-label">
+                  {editingSlot.kind === 'single'
+                    ? '单日颜色'
+                    : editingSlot.kind === 'multi'
+                      ? `第 ${editingSlot.index + 1} 个多日颜色`
+                      : '这条安排的颜色'}
+                </span>
+                <button type="button" className="button button--ghost" onClick={() => setEditingSlot(null)}>
+                  收起色盘
+                </button>
+              </div>
+
+              <RgbColorPicker
+                label={
+                  editingSlot.kind === 'single'
+                    ? '单日颜色'
+                    : editingSlot.kind === 'multi'
+                      ? `多日颜色 ${editingSlot.index + 1}`
+                      : '这条安排的颜色'
+                }
+                value={currentSlotColor(editingSlot, styleForRender)}
+                onChange={(hex) => previewColor(slotPreviewKey(editingSlot), hex)}
+                onCommit={(hex) => void commitSlotColor(editingSlot, hex)}
+              />
+
+              <div className="calendar__colors-row">
+                <span className="calendar__colors-label">快捷</span>
+                {COLOR_PRESETS.map((preset) => (
                   <button
-                    key={`palette-${index}-${candidate}`}
+                    key={preset}
                     type="button"
-                    className="swatch swatch__option"
-                    style={{ background: candidate }}
-                    aria-label={`第 ${index + 1} 个多日颜色改为 ${candidate}`}
-                    onClick={() => {
-                      const next = [...highlight.multiDayPalette];
-                      next[index] = candidate;
-                      void onSaveHighlight({ highlight: { multiDayPalette: next } });
-                    }}
+                    className="swatch"
+                    style={{ background: preset }}
+                    aria-label={`把当前颜色设为 ${preset}`}
+                    onClick={() => void commitSlotColor(editingSlot, preset)}
                   />
                 ))}
-              </span>
-            ))}
-          </div>
-          <p className="calendar__hint">
-            多日区间的颜色按顺序循环，保证相邻安排颜色不同。想单独改某一条，
-            点日期后在该条目上点「改颜色」。
-          </p>
+              </div>
+            </div>
+          ) : (
+            <p className="calendar__hint">
+              点任意色块打开 RGB 色盘，可以拖 R / G / B 三条滑条精确调色。
+              多日区间的颜色按顺序循环，保证相邻安排颜色不同；想单独改某一条，
+              点日期后在该条目上点「改颜色」。
+            </p>
+          )}
         </div>
       ) : null}
 
@@ -275,7 +384,7 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
                   <li key={card.id} className="calendar__detail-item">
                     <span
                       className="calendar__detail-dot"
-                      style={{ background: resolveCardColor(card, highlight) }}
+                      style={{ background: resolveCardColor(card, styleForRender) }}
                       aria-hidden="true"
                     />
                     <div className="calendar__detail-body">
@@ -296,21 +405,25 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
                     </div>
                     {editingCardId === card.id ? (
                       <span className="calendar__detail-colors">
-                        {COLOR_SWATCHES.map((color) => (
-                          <button
-                            key={color}
-                            type="button"
-                            className="swatch swatch--small"
-                            style={{ background: color }}
-                            aria-label={`把这条改为 ${color}`}
-                            onClick={() => void setCardColor(card.id, color)}
-                          />
-                        ))}
+                        <RgbColorPicker
+                          label="这条安排的颜色"
+                          value={resolveCardColor(card, styleForRender)}
+                          onChange={(hex) => previewColor(`card-${card.id}`, hex)}
+                          onCommit={(hex) =>
+                            void commitColor(`card-${card.id}`, {
+                              highlight: { perCard: { [card.id]: hex } },
+                            })
+                          }
+                        />
                         {highlight.perCard[card.id] ? (
                           <button
                             type="button"
                             className="button button--danger"
-                            onClick={() => void setCardColor(card.id, null)}
+                            onClick={() =>
+                              void commitColor(`card-${card.id}`, {
+                                highlight: { perCard: { [card.id]: null } },
+                              })
+                            }
                           >
                             恢复默认
                           </button>
@@ -340,7 +453,7 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
             <span key={card.id} className="calendar__legend-item">
               <span
                 className="calendar__legend-dot"
-                style={{ background: resolveCardColor(card, highlight) }}
+                style={{ background: resolveCardColor(card, styleForRender) }}
                 aria-hidden="true"
               />
               {card.title}（{card.schedule?.dayCount} 天）

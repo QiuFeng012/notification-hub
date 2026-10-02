@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -455,15 +455,66 @@ describe('点日期看当天安排', () => {
 });
 
 describe('荧光笔颜色自定义', () => {
-  it('可以改单日颜色', async () => {
+  it('点颜色打开 RGB 色盘', async () => {
+    await openCalendar([makeCard()]);
+    await screen.findByText('2025 年 3 月');
+
+    await userEvent.click(screen.getByRole('button', { name: '荧光笔颜色' }));
+    expect(screen.queryByTestId('rgb-picker')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '编辑单日颜色' }));
+    expect(await screen.findByTestId('rgb-picker')).toBeInTheDocument();
+    // 三条通道都在
+    for (const name of ['R', 'G', 'B'] as const) {
+      expect(screen.getByLabelText(`单日颜色：${name} 通道`)).toBeInTheDocument();
+    }
+  });
+
+  it('在色盘里输入十六进制即可改单日颜色', async () => {
     const { settingsApi } = await openCalendar([makeCard()]);
     await screen.findByText('2025 年 3 月');
 
     await userEvent.click(screen.getByRole('button', { name: '荧光笔颜色' }));
-    await userEvent.click(screen.getByRole('button', { name: '单日颜色 #4a7c8c' }));
+    await userEvent.click(screen.getByRole('button', { name: '编辑单日颜色' }));
+
+    const hex = await screen.findByLabelText('单日颜色：十六进制值');
+    await userEvent.clear(hex);
+    await userEvent.type(hex, '#4a7c8c');
 
     await waitFor(() =>
       expect(settingsApi.updateSettings).toHaveBeenCalledWith({ highlight: { singleDay: '#4a7c8c' } }),
+    );
+  });
+
+  it('拖动 R 通道滑条即可改色', async () => {
+    const { settingsApi } = await openCalendar([makeCard()]);
+    await screen.findByText('2025 年 3 月');
+
+    await userEvent.click(screen.getByRole('button', { name: '荧光笔颜色' }));
+    await userEvent.click(screen.getByRole('button', { name: '编辑单日颜色' }));
+
+    const slider = (await screen.findByLabelText('单日颜色：R 通道')) as HTMLInputElement;
+    fireEvent.change(slider, { target: { value: '0' } });
+    fireEvent.pointerUp(slider);
+
+    await waitFor(() => expect(settingsApi.updateSettings).toHaveBeenCalled());
+    const patch = vi.mocked(settingsApi.updateSettings).mock.calls[0]?.[0] as {
+      highlight?: { singleDay?: string };
+    };
+    // 只改了 R，其余通道保持原值
+    expect(patch.highlight?.singleDay).toBe('#00643f');
+  });
+
+  it('可以通过快捷色块一键改色', async () => {
+    const { settingsApi } = await openCalendar([makeCard()]);
+    await screen.findByText('2025 年 3 月');
+
+    await userEvent.click(screen.getByRole('button', { name: '荧光笔颜色' }));
+    await userEvent.click(screen.getByRole('button', { name: '编辑单日颜色' }));
+    await userEvent.click(await screen.findByRole('button', { name: '把当前颜色设为 #4f7a52' }));
+
+    await waitFor(() =>
+      expect(settingsApi.updateSettings).toHaveBeenCalledWith({ highlight: { singleDay: '#4f7a52' } }),
     );
   });
 
@@ -486,7 +537,10 @@ describe('荧光笔颜色自定义', () => {
     await userEvent.click(document.querySelector('[data-date="2025-03-06"]') as HTMLElement);
     const detail = await screen.findByTestId('calendar-detail');
     await userEvent.click(within(detail).getByRole('button', { name: '改颜色' }));
-    await userEvent.click(within(detail).getByRole('button', { name: '把这条改为 #7a5c8e' }));
+
+    const hex = within(detail).getByLabelText('这条安排的颜色：十六进制值');
+    await userEvent.clear(hex);
+    await userEvent.type(hex, '#7a5c8e');
 
     await waitFor(() =>
       expect(settingsApi.updateSettings).toHaveBeenCalledWith({
@@ -531,7 +585,8 @@ describe('荧光笔颜色自定义', () => {
     await screen.findByText('2025 年 3 月');
 
     await userEvent.click(screen.getByRole('button', { name: '荧光笔颜色' }));
-    await userEvent.click(screen.getByRole('button', { name: '单日颜色 #4a7c8c' }));
+    await userEvent.click(screen.getByRole('button', { name: '编辑单日颜色' }));
+    await userEvent.click(await screen.findByRole('button', { name: '把当前颜色设为 #4f7a52' }));
 
     await waitFor(() => expect(screen.queryByText('设置已保存')).not.toBeInTheDocument());
   });
