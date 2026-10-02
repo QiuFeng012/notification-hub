@@ -3,6 +3,7 @@ import type { HighlightStyle, UpdateSettingsRequest } from '@notification-hub/sh
 import type { CardView } from '../lib/card-view';
 import {
   buildMonthWeeks,
+  CALENDAR_COLUMNS,
   countUnscheduled,
   isDateInSchedule,
   resolveCardColor,
@@ -111,7 +112,12 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
           ['--span-color' as string]: color,
         }}
         title={`${span.card.title}（${span.card.schedule?.label ?? ''}）`}
-        onClick={() => setSelectedDate(week.days[span.startColumn]?.date ?? null)}
+        onClick={() =>
+          setSelectedDate(
+            // 点区间时优先跳到区间的起始日；跨周延续过来的段则落在本周第一天
+            span.startsHere ? (span.card.schedule?.start ?? null) : (week.days[0]?.date ?? null),
+          )
+        }
       >
         {/* 起始圆：区间从更早的周延续过来时不画，改为平头，示意还没结束 */}
         <span className={showStart ? 'span__cap span__cap--start' : 'span__edge span__edge--start'} />
@@ -200,7 +206,10 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
         </p>
       ) : null}
 
-      <div className="calendar__weekdays" style={{ gridTemplateColumns: `repeat(7, minmax(0, 1fr))` }}>
+      <div
+        className="calendar__weekdays"
+        style={{ gridTemplateColumns: `repeat(${CALENDAR_COLUMNS}, minmax(0, 1fr))` }}
+      >
         {WEEKDAY_LABELS.map((label) => (
           <span key={label} className="calendar__weekday">
             {label}
@@ -219,11 +228,13 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
               key={week.days[0]?.date ?? 'week'}
               className="calendar__week"
               data-testid="calendar-week"
-              data-days={week.columnCount}
-              style={{ gridTemplateColumns: `repeat(${week.columnCount}, minmax(0, 1fr))` }}
+              data-days={week.days.length}
+              style={{ gridTemplateColumns: `repeat(${CALENDAR_COLUMNS}, minmax(0, 1fr))` }}
             >
-              {/* 第一行：本周日期，圆形，仅本月 */}
-              {week.days.map((day, column) => {
+              {/* 第一行：本周日期，圆形，仅本月。
+                  固定 7 列栅格，日期按星期几落到自己的那一列，
+                  所以首末周可能出现空列——这正是与星期表头对齐的代价。 */}
+              {week.days.map((day, index) => {
                 const classes = ['day-circle'];
                 if (day.isToday) classes.push('day-circle--today');
                 if (selectedDate === day.date) classes.push('day-circle--selected');
@@ -234,7 +245,7 @@ export function CalendarView({ cards, loading, highlight, onSaveHighlight, today
                     className={classes.join(' ')}
                     data-testid="calendar-day"
                     data-date={day.date}
-                    style={{ gridColumn: column + 1, gridRow: 1 }}
+                    style={{ gridColumn: (week.dayColumns[index] ?? 0) + 1, gridRow: 1 }}
                     onClick={() => setSelectedDate(day.date === selectedDate ? null : day.date)}
                   >
                     {day.day}

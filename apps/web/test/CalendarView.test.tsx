@@ -182,6 +182,31 @@ describe('圆形日期与周排版', () => {
     expect(weekLengths).toEqual([1, 7, 7, 7, 7, 2]);
   });
 
+  it('每个日期圆对齐到它所属的星期几那一列', async () => {
+    await openCalendar([makeCard()]);
+    await screen.findByText('2025 年 3 月');
+
+    // 03-01 是周六 → grid 第 6 列，不会被挤到第 1 列
+    expect((document.querySelector('[data-date="2025-03-01"]') as HTMLElement).style.gridColumn).toBe('6');
+    // 03-02 是周日 → grid 第 7 列
+    expect((document.querySelector('[data-date="2025-03-02"]') as HTMLElement).style.gridColumn).toBe('7');
+    // 03-03 是周一 → 第 1 列
+    expect((document.querySelector('[data-date="2025-03-03"]') as HTMLElement).style.gridColumn).toBe('1');
+    // 03-05 是周三 → 第 3 列
+    expect((document.querySelector('[data-date="2025-03-05"]') as HTMLElement).style.gridColumn).toBe('3');
+    // 03-31 是周一 → 第 1 列
+    expect((document.querySelector('[data-date="2025-03-31"]') as HTMLElement).style.gridColumn).toBe('1');
+  });
+
+  it('每一周的栅格都是 7 列，首末周靠空列保持对齐', async () => {
+    await openCalendar([makeCard()]);
+    await screen.findByText('2025 年 3 月');
+
+    for (const week of screen.getAllByTestId('calendar-week')) {
+      expect((week as HTMLElement).style.gridTemplateColumns).toContain('repeat(7');
+    }
+  });
+
   it('今天用实心圆标出', async () => {
     await openCalendar([makeCard()]);
     await screen.findByText('2025 年 3 月');
@@ -226,8 +251,9 @@ describe('区间：圆—矩形—圆', () => {
     await screen.findByText('2025 年 3 月');
 
     const span = spansInWeek('2025-03-05')[0] as HTMLElement;
-    // 周以周一开始：03-02 是第 1 列 → 03-05 是第 4 列，03-07 是第 6 列
-    expect(span.style.gridColumn).toBe('4 / 7');
+    // 列下标按星期几：03-05 是周三（下标 2）→ grid 第 3 列起；
+    // 03-07 是周五（下标 4）→ grid 到第 6 列前，即 3 / 6
+    expect(span.style.gridColumn).toBe('3 / 6');
   });
 
   it('跨周区间被切成两段，各自用平头示意未结束', async () => {

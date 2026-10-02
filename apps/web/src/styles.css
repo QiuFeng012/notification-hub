@@ -481,11 +481,17 @@ body {
 /**
  * 每个周一块：第一行是日期圆，第二行起是区间。
  * 列宽用 1fr 等分，圆居中在列内，区间横跨 startColumn..endColumn。
+ *
+ * row-gap 不能省：日期圆和区间条都是 26px 高，
+ * 行距为 0 时区间条会直接压在日期圆上，看起来像叠在一起。
  */
 .calendar__week {
   display: grid;
-  gap: 4px;
-  padding: 5px 6px;
+  grid-template-rows: repeat(2, 26px);
+  grid-auto-rows: 26px;
+  column-gap: 4px;
+  row-gap: 6px;
+  padding: 6px 6px 7px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
