@@ -1,4 +1,4 @@
-﻿<#
+<#
   启动器脚本测试：校验各 .ps1 的语法，并确认它们能正常运行。
 
   为什么单独测：PowerShell 脚本的问题只会在双击时才暴露，
@@ -154,7 +154,7 @@ Check "启动脚本等待服务就绪而不是盲目打开页面" ($startScript 
 # 曾经把 RepoRoot 的默认值写成 (Split-Path -Parent $PSScriptRoot)，
 # 而参数默认值在 $PSScriptRoot 赋值之前求值，双击必然报错、脚本完全不可用，
 # 但 ParseFile 一个错误都报不出来。所以必须真的跑一次。
-Write-Host "`n3b. 真实执行（不改变服务状态）"
+Write-Host "`n3b. 真实执行（会停止正在运行的服务，需自行重启）"
 foreach ($name in @('status.ps1', 'stop-server.ps1')) {
   $result = Invoke-Capture (Join-Path $scriptsDir $name) @('-Port', "$Port")
   Check "$name 能正常执行" ($result.Code -eq 0) "退出码 $($result.Code)：$($result.Output)"
