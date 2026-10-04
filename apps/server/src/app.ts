@@ -127,6 +127,20 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return reply.code(200).send(updated);
   });
 
+  // 置顶单独开一个接口：它不改变卡片内容，也就不该要求填写 reason，
+  // 更不该计入 revisionCount（改动历史只记录内容变化）。
+  app.put('/api/cards/:id/pinned', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { pinned?: unknown };
+    const updated = options.cardService.setPinned(id, body.pinned);
+    if (!updated) {
+      return reply
+        .code(404)
+        .send({ error: { code: 'CARD_NOT_FOUND', message: '信息卡不存在或已被删除' } });
+    }
+    return reply.code(200).send(updated);
+  });
+
   app.get('/api/cards/:id/revisions', async (request, reply) => {
     const { id } = request.params as { id: string };
     const card = options.cardService.getCard(id);

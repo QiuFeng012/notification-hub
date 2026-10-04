@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { CardKeywords, CardRevision, UpdateCardRequest } from '@notification-hub/shared';
-import { formatRelative, type CardView } from '../lib/card-view';
+import { formatRelative, formatScheduleRange, type CardView } from '../lib/card-view';
+import { isExpired } from '../lib/sort';
 import { CardEditForm } from './CardEditForm';
 import { RevisionHistory } from './RevisionHistory';
 
@@ -10,7 +11,13 @@ interface CardItemProps {
   onEdit: (id: string, patch: UpdateCardRequest) => Promise<boolean>;
   onLoadRevisions: (id: string) => Promise<CardRevision[]>;
   onClearRevisions: (id: string) => Promise<void>;
+  /** 置顶 / 取消置顶 */
+  onTogglePin: (id: string, pinned: boolean) => Promise<void>;
   onDelete: (id: string) => Promise<void>;
+  /** 是否是刚生成的那张卡：滚进视野并闪一下 */
+  highlighted?: boolean;
+  /** 今天，格式 YYYY-MM-DD */
+  today: string;
 }
 
 /**
@@ -82,18 +89,46 @@ export function highlightSegments(
 const FALLBACK_PREFIX = '（关注点）';
 
 /** 单张信息卡：标题 + 元信息 + 要点列表，原文默认折叠 */
-export function CardItem({ card, onEdit, onLoadRevisions, onClearRevisions, onDelete }: CardItemProps) {
+export function CardItem({
+  card,
+  onEdit,
+  onLoadRevisions,
+  onClearRevisions,
+  onTogglePin,
+  onDelete,
+  highlighted = false,
+  today,
+}: CardItemProps) {
   const [showRaw, setShowRaw] = useState(false);
   const [editing, setEditing] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+  const articleRef = useRef<HTMLElement>(null);
 
   const { priority, hit, missed } = readKeywords(card);
   const hasKeywords = priority.length > 0;
   const edited = card.revisionCount > 0;
+  const scheduleLabel = formatScheduleRange(card.schedule, Number(today.slice(0, 4)));
+  const expired = isExpired(card, today);
+
+  // 列表按事件时间排，新卡片可能落在视野外（没有日期的更是直接沉底），
+  // 所以生成之后主动把它滚进视野，否则用户会以为提交失败了。
+  useEffect(() => {
+    if (!highlighted) return;
+    // jsdom 没有实现 scrollIntoView，用可选调用让组件测试也能跑
+    articleRef.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+  }, [highlighted]);
+
+  const className = [
+    'card',
+    card.pinned ? 'card--pinned' : '',
+    highlighted ? 'card--new' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   if (editing) {
     return (
-      <article className="card" data-testid="info-card">
+      <article className={className} ref={articleRef} data-testid="info-card" data-card-id={card.id}>
         <header className="card__header">
           <h3 className="card__title">修改信息卡</h3>
         </header>
@@ -111,7 +146,7 @@ export function CardItem({ card, onEdit, onLoadRevisions, onClearRevisions, onDe
   }
 
   return (
-    <article className="card" data-testid="info-card">
+    <article className={className} ref={articleRef} data-testid="info-card" data-card-id={card.id}>
       <header className="card__header">
         <h3 className="card__title">{card.title}</h3>
         <span className="card__time-ago" title={card.createdAtLabel}>
@@ -120,6 +155,11 @@ export function CardItem({ card, onEdit, onLoadRevisions, onClearRevisions, onDe
       </header>
 
       <div className="card__meta">
+        {card.pinned ? (
+          <span className="chip chip--pinned" data-testid="pinned-badge">
+            已置顶
+          </span>
+        ) : null}
         <span className="chip">
           <span className="chip__key">来源</span>
           {card.source ?? '未识别'}
@@ -128,6 +168,21 @@ export function CardItem({ card, onEdit, onLoadRevisions, onClearRevisions, onDe
           <span className="chip__key">时间</span>
           {card.time ?? '未识别'}
         </span>
+        {scheduleLabel ? (
+          <span className="chip chip--schedule" data-testid="schedule-chip" title="列表按这个日期排序">
+            <span className="chip__key">日程</span>
+            {scheduleLabel}
+          </span>
+        ) : (
+          <span className="chip chip--no-schedule" data-testid="no-schedule-chip">
+            无日期
+          </span>
+        )}
+        {expired ? (
+          <span className="chip chip--expired" data-testid="expired-chip" title="已过期的卡片排在下面">
+            已过期
+          </span>
+        ) : null}
         <span className={card.provider === 'deepseek' ? 'chip chip--ai' : 'chip chip--mock'}>
           {card.provider === 'deepseek' ? 'AI 摘要' : '启发式摘要'}
         </span>
@@ -185,6 +240,15 @@ export function CardItem({ card, onEdit, onLoadRevisions, onClearRevisions, onDe
       )}
 
       <footer className="card__footer">
+        <button
+          type="button"
+          className={card.pinned ? 'button button--ghost button--pin-on' : 'button button--ghost'}
+          aria-pressed={card.pinned}
+          onClick={() => void onTogglePin(card.id, !card.pinned)}
+          aria-label={`${card.pinned ? '取消置顶' : '置顶'}信息卡：${card.title}`}
+        >
+          {card.pinned ? '取消置顶' : '置顶'}
+        </button>
         <button
           type="button"
           className="button button--ghost"

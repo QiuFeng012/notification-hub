@@ -1,4 +1,5 @@
 import type { CardKeywords, CardSchedule, InfoCard } from '@notification-hub/shared';
+import { splitIsoDate } from './calendar';
 
 /** 信息卡在界面上的形态：时间与要点列表已归一化，时间戳已格式化为可读中文 */
 export interface CardView {
@@ -23,6 +24,8 @@ export interface CardView {
   updatedAt: string | null;
   /** 改动次数；大于 0 时界面显示"已修改"标记 */
   revisionCount: number;
+  /** 是否置顶；置顶的卡片始终排在列表最前 */
+  pinned: boolean;
 }
 
 /**
@@ -55,7 +58,37 @@ export function toCardView(input: unknown): CardView | null {
     createdAtLabel: formatTimestamp(card.createdAt),
     updatedAt: typeof card.updatedAt === 'string' && card.updatedAt.length > 0 ? card.updatedAt : null,
     revisionCount: typeof card.revisionCount === 'number' && card.revisionCount > 0 ? card.revisionCount : 0,
+    pinned: card.pinned === true,
   };
+}
+
+/**
+ * 把排期折成 "3月8日" / "3月8日 - 3月10日" / "2027年3月8日"。
+ *
+ * 列表默认按事件时间排序，卡片上就必须写出这个日期——
+ * 否则用户看到"这张排在前面"却找不到任何排序依据。
+ *
+ * @param referenceYear 当前年份；日程不在这一年时补上年份。
+ *   没有它，今年的 9月23日 和明年的 3月8日 会都写成"9月23日""3月8日"，
+ *   排出来的顺序看起来就是乱的。
+ */
+export function formatScheduleRange(
+  schedule: CardSchedule | null,
+  referenceYear?: number,
+): string | null {
+  if (!schedule) return null;
+  const start = shortDate(schedule.start, referenceYear);
+  if (!start) return null;
+  const end = shortDate(schedule.end, referenceYear);
+  if (!end || schedule.end === schedule.start) return start;
+  return `${start} - ${end}`;
+}
+
+function shortDate(value: string, referenceYear?: number): string | null {
+  const parts = splitIsoDate(value);
+  if (!parts) return null;
+  const prefix = referenceYear !== undefined && parts.year !== referenceYear ? `${parts.year}年` : '';
+  return `${prefix}${parts.month}月${parts.day}日`;
 }
 
 /** 日程的归一化：起始日期不合法就当作没有排期，避免把坏数据铺进日历 */

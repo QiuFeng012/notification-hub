@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { formatRelative, formatTimestamp, toCardView } from '../src/lib/card-view';
+import { formatRelative, formatScheduleRange, formatTimestamp, toCardView } from '../src/lib/card-view';
+import type { CardSchedule } from '@notification-hub/shared';
 
 const VALID_CARD = {
   id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
@@ -56,6 +57,41 @@ describe('toCardView', () => {
 
   it('rawText 缺失时为空字符串，查看原文不会显示 undefined', () => {
     expect(toCardView({ ...VALID_CARD, rawText: undefined })?.rawText).toBe('');
+  });
+
+  it('pinned 只有明确为 true 才算置顶', () => {
+    expect(toCardView({ ...VALID_CARD, pinned: true })?.pinned).toBe(true);
+    expect(toCardView({ ...VALID_CARD, pinned: false })?.pinned).toBe(false);
+    // 老数据没有这个字段，不能因此把卡片当成已置顶
+    expect(toCardView({ ...VALID_CARD, pinned: undefined })?.pinned).toBe(false);
+    expect(toCardView({ ...VALID_CARD, pinned: 'true' })?.pinned).toBe(false);
+  });
+});
+
+describe('formatScheduleRange', () => {
+  function sched(start: string, end: string): CardSchedule {
+    return { start, end, dayCount: 1, label: '', inferredYear: false };
+  }
+
+  it('单日只写一个日期，多日写成区间', () => {
+    expect(formatScheduleRange(sched('2026-10-03', '2026-10-03'))).toBe('10月3日');
+    expect(formatScheduleRange(sched('2026-10-03', '2026-10-05'))).toBe('10月3日 - 10月5日');
+  });
+
+  it('没有排期或日期非法时返回 null，界面会改显示"无日期"', () => {
+    expect(formatScheduleRange(null)).toBeNull();
+    expect(formatScheduleRange(sched('不是日期', '也不是'))).toBeNull();
+  });
+
+  it('日程不在当前年份时补上年份', () => {
+    // 不补年份的话，今年的 9月23日 和明年的 3月8日 长得一模一样，
+    // 列表里看起来就是乱序的
+    expect(formatScheduleRange(sched('2027-03-08', '2027-03-08'), 2026)).toBe('2027年3月8日');
+    expect(formatScheduleRange(sched('2026-03-08', '2026-03-08'), 2026)).toBe('3月8日');
+    // 区间跨年时两端各自判断
+    expect(formatScheduleRange(sched('2026-12-30', '2027-01-02'), 2026)).toBe('12月30日 - 2027年1月2日');
+    // 不传参考年份就保持原样，日历等场景不需要这个前缀
+    expect(formatScheduleRange(sched('2027-03-08', '2027-03-08'))).toBe('3月8日');
   });
 });
 

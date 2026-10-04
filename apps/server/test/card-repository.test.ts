@@ -24,6 +24,7 @@ function makeCard(overrides: Partial<InfoCard> = {}): InfoCard {
     createdAt: new Date().toISOString(),
     updatedAt: null,
     revisionCount: 0,
+    pinned: false,
     ...overrides,
   };
 }
@@ -494,6 +495,77 @@ describe('sqlite 仓储', () => {
       repo.close();
     }
   });
+
+  it('置顶状态写进库并能读回', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      const card = makeCard();
+      repo.insert(card);
+      assert.equal(repo.get(card.id)?.pinned, false);
+
+      const pinned = repo.setPinned(card.id, true);
+      assert.equal(pinned?.pinned, true);
+      assert.equal(repo.get(card.id)?.pinned, true);
+
+      assert.equal(repo.setPinned(card.id, false)?.pinned, false);
+      assert.equal(repo.get(card.id)?.pinned, false);
+    } finally {
+      repo.close();
+    }
+  });
+
+  it('置顶状态在重开数据库后仍然存在', () => {
+    const dbPath = tempDbPath();
+    const first = createSqliteCardRepository(dbPath);
+    const card = makeCard();
+    first.insert(card);
+    first.setPinned(card.id, true);
+    first.close();
+
+    const second = createSqliteCardRepository(dbPath);
+    try {
+      assert.equal(second.get(card.id)?.pinned, true);
+    } finally {
+      second.close();
+    }
+  });
+
+  it('置顶不改变改动次数与编辑时间', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      const card = makeCard();
+      repo.insert(card);
+      const pinned = repo.setPinned(card.id, true);
+      assert.equal(pinned?.revisionCount, card.revisionCount);
+      assert.equal(pinned?.updatedAt, null);
+      assert.deepEqual(repo.listRevisions(card.id), []);
+    } finally {
+      repo.close();
+    }
+  });
+
+  it('编辑卡片时置顶状态不丢', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      const card = makeCard();
+      repo.insert(card);
+      repo.setPinned(card.id, true);
+      const updated = repo.update(card.id, { title: '改过标题' }, 'manual', null);
+      assert.equal(updated?.pinned, true);
+      assert.equal(repo.get(card.id)?.pinned, true);
+    } finally {
+      repo.close();
+    }
+  });
+
+  it('给不存在的卡片置顶返回 null', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      assert.equal(repo.setPinned('不存在的-id', true), null);
+    } finally {
+      repo.close();
+    }
+  });
 });
 
 describe('内存仓储', () => {
@@ -552,5 +624,17 @@ describe('内存仓储', () => {
 
     repo.delete(card.id);
     assert.deepEqual(repo.listRevisions(card.id), []);
+  });
+
+  it('与 sqlite 行为一致：置顶开关', () => {
+    const repo = createMemoryCardRepository();
+    const card = makeCard();
+    repo.insert(card);
+    assert.equal(repo.get(card.id)?.pinned, false);
+
+    assert.equal(repo.setPinned(card.id, true)?.pinned, true);
+    assert.equal(repo.get(card.id)?.pinned, true);
+    assert.equal(repo.setPinned(card.id, false)?.pinned, false);
+    assert.equal(repo.setPinned('不存在', true), null);
   });
 });

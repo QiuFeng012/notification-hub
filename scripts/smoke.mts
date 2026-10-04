@@ -49,14 +49,34 @@ async function main(): Promise<void> {
   check('列表条数 +1', afterCreate.length === before.length + 1, `${before.length} -> ${afterCreate.length}`);
   check('新卡排在首位', afterCreate[0]?.id === created.id);
 
-  console.log('3. 删除信息卡（本次修复的目标路径）');
+  console.log('3. 置顶 / 取消置顶（真实协议：PUT + JSON body 的独立接口）');
+  const pinned = await api.setPinned(created.id, true);
+  check('置顶后返回 pinned=true', pinned.pinned === true);
+  check(
+    '置顶不算内容改动：不改标题、不计入改动次数',
+    pinned.title === created.title && pinned.revisionCount === created.revisionCount,
+    `revisionCount ${created.revisionCount} -> ${pinned.revisionCount}`,
+  );
+
+  const listedAfterPin = (await (await fetch(`${baseUrl}/api/cards`)).json()) as {
+    cards: Array<{ id: string; pinned: boolean }>;
+  };
+  check(
+    '列表接口能读回置顶状态（说明真写进了库）',
+    listedAfterPin.cards.find((card) => card.id === created.id)?.pinned === true,
+  );
+
+  const unpinned = await api.setPinned(created.id, false);
+  check('取消置顶后返回 pinned=false', unpinned.pinned === false);
+
+  console.log('4. 删除信息卡（曾经出过协议问题的路径）');
   await api.deleteCard(created.id);
 
   const afterDelete = await api.listCards();
   check('列表条数恢复', afterDelete.length === before.length, `${afterCreate.length} -> ${afterDelete.length}`);
   check('被删的卡不在列表里', !afterDelete.some((card) => card.id === created.id));
 
-  console.log('4. 删除不存在的卡片应报错');
+  console.log('5. 删除不存在的卡片应报错');
   let errored = false;
   try {
     await api.deleteCard(created.id);
@@ -65,7 +85,7 @@ async function main(): Promise<void> {
   }
   check('重复删除会抛错', errored);
 
-  console.log('5. API 设置接口（只读检查，不改动你的配置）');
+  console.log('6. API 设置接口（只读检查，不改动你的配置）');
   const settingsResponse = await fetch(`${baseUrl}/api/settings`);
   check('GET /api/settings 返回 200', settingsResponse.ok, `HTTP ${settingsResponse.status}`);
   const settingsText = await settingsResponse.text();
@@ -87,7 +107,7 @@ async function main(): Promise<void> {
     console.log(`     Key 掩码：${String(settings.apiKeyMask)}`);
   }
 
-  console.log('6. 非法设置应被拒绝而不是 500');
+  console.log('7. 非法设置应被拒绝而不是 500');
   const tooLong = await fetch(`${baseUrl}/api/settings`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },

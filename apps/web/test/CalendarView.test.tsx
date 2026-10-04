@@ -37,6 +37,7 @@ function makeCard(overrides: Partial<CardView> = {}): CardView {
     createdAtLabel: '2025-03-05 14:32',
     updatedAt: null,
     revisionCount: 0,
+    pinned: false,
     ...overrides,
   };
 }
@@ -73,6 +74,7 @@ function makeApis(
     updateCard: vi.fn(async (id, patch) => makeCard({ id, ...patch })),
     listRevisions: vi.fn(async () => options.revisions ?? []),
     clearRevisions: vi.fn(async () => undefined),
+    setPinned: vi.fn(async (id: string, pinned: boolean) => makeCard({ id, pinned })),
     deleteCard: vi.fn(async () => undefined),
   };
   const settingsApi: SettingsApi = {
@@ -383,9 +385,10 @@ describe('未排期与空态', () => {
       listCards: vi.fn(() => new Promise<CardView[]>(() => undefined)),
       createCard: vi.fn(async () => makeCard()),
       updateCard: vi.fn(async (id, patch) => makeCard({ id, ...patch })),
-    listRevisions: vi.fn(async () => []),
-    clearRevisions: vi.fn(async () => undefined),
-    deleteCard: vi.fn(async () => undefined),
+      listRevisions: vi.fn(async () => []),
+      clearRevisions: vi.fn(async () => undefined),
+      setPinned: vi.fn(async (id: string, pinned: boolean) => makeCard({ id, pinned })),
+      deleteCard: vi.fn(async () => undefined),
     };
     render(<App api={cardApi} settingsApi={makeApis([]).settingsApi} today={TODAY} />);
     await userEvent.click(await screen.findByRole('tab', { name: '日历视图' }));

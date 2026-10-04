@@ -37,6 +37,13 @@ export interface CardRepository {
    * 用于把"验证/误操作"留下的记录整理掉；内容本身不动。
    */
   clearRevisions(cardId: string): number;
+  /**
+   * 设置置顶状态；目标不存在时返回 null。
+   *
+   * 与 update 分开：置顶只影响排序、不改内容，也不该记进改动历史
+   * （否则"改过 N 次"会被纯粹的顺序调整污染）。
+   */
+  setPinned(id: string, pinned: boolean): InfoCard | null;
   /** 删除成功返回 true，目标不存在返回 false */
   delete(id: string): boolean;
   /** 释放底层资源 */

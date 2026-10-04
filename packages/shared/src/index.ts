@@ -6,10 +6,21 @@ export type {
   CardRevision,
   CardRevisionListResponse,
   CardSchedule,
+  CardSortMode,
   HighlightStyle,
   RevisionReason,
   UpdateCardRequest,
 } from './calendar.js';
+
+/** 卡片列表的排序方式中文标签。前后端共用，所以放在运行时值这一侧。 */
+export const CARD_SORT_LABELS: Record<'event' | 'created', string> = {
+  event: '按事件时间',
+  created: '按录入时间',
+};
+
+export function isCardSortMode(value: unknown): value is 'event' | 'created' {
+  return value === 'event' || value === 'created';
+}
 
 /** 修改原因的中文标签。放在这里是因为前后端都要用，且是运行时值。 */
 export const REVISION_REASON_LABELS: Record<'official' | 'manual' | 'other', string> = {
@@ -110,6 +121,11 @@ export interface InfoCard {
   updatedAt: string | null;
   /** 改动次数；历史版本条数与它一致 */
   revisionCount: number;
+  /**
+   * 是否置顶。置顶的卡片始终排在列表最前，
+   * 用于"我要一直盯着这条"——不改变任何内容，只影响排序。
+   */
+  pinned: boolean;
 }
 
 export type SummaryProvider = 'deepseek' | 'mock';

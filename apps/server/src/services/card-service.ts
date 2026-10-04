@@ -47,6 +47,8 @@ export interface CardService {
   listRevisions(id: string): CardRevision[];
   /** 清空某张卡片的改动历史；目标不存在返回 null */
   clearRevisions(id: string): number | null;
+  /** 设置置顶；目标不存在返回 null */
+  setPinned(id: string, pinned: unknown): InfoCard | null;
   /** 删除并返回被删掉的信息卡，目标不存在返回 null */
   deleteCard(id: string): InfoCard | null;
 }
@@ -236,6 +238,7 @@ export function createCardService(
         createdAt: createdAt.toISOString(),
         updatedAt: null,
         revisionCount: 0,
+        pinned: false,
       };
 
       return repo.insert(card);
@@ -265,6 +268,14 @@ export function createCardService(
       assertCardId(id);
       if (!repo.get(id)) return null;
       return repo.clearRevisions(id);
+    },
+
+    setPinned(id, pinned) {
+      assertCardId(id);
+      if (typeof pinned !== 'boolean') {
+        throw new ValidationError('INVALID_BODY', 'pinned 必须是布尔值');
+      }
+      return repo.setPinned(id, pinned);
     },
 
     deleteCard(id) {

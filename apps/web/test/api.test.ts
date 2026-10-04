@@ -145,3 +145,31 @@ describe('createCardApi.deleteCard', () => {
     });
   });
 });
+
+describe('createCardApi.setPinned', () => {
+  it('PUT 到 /pinned 并把 pinned 放进 body', async () => {
+    const spy = mockFetch(() => jsonResponse({ ...SERVER_CARD, pinned: true }));
+    const card = await createCardApi().setPinned(SERVER_CARD.id, true);
+
+    const [url, init] = spy.mock.calls[0] ?? [];
+    expect(url).toBe(`/api/cards/${SERVER_CARD.id}/pinned`);
+    expect(init?.method).toBe('PUT');
+    expect(init?.body).toBe(JSON.stringify({ pinned: true }));
+    // 有 body 就必须声明 Content-Type，否则 Fastify 的 JSON 解析器会拒绝
+    expect((init?.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+    expect(card.pinned).toBe(true);
+  });
+
+  it('服务端漏返回 pinned 时按未置顶处理，而不是 undefined', async () => {
+    mockFetch(() => jsonResponse(SERVER_CARD));
+    const card = await createCardApi().setPinned(SERVER_CARD.id, false);
+    expect(card.pinned).toBe(false);
+  });
+
+  it('服务端返回结构不对时抛出 INVALID_RESPONSE', async () => {
+    mockFetch(() => jsonResponse({ nope: true }));
+    await expect(createCardApi().setPinned(SERVER_CARD.id, true)).rejects.toMatchObject({
+      code: 'INVALID_RESPONSE',
+    });
+  });
+});

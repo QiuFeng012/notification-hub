@@ -1217,6 +1217,52 @@ body {
 
 /* ---------- 信息卡 ---------- */
 
+/* 列表工具栏：左边一句话说明当前排序规则，右边切换按钮。
+   排序规则不像"最新在前"那样不言自明，所以把规则写在界面上。 */
+.list-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-bottom: 12px;
+}
+
+.list-toolbar__hint {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.list-toolbar__sorts {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-sunken);
+}
+
+.sort-tab {
+  padding: 3px 12px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.sort-tab:hover {
+  color: var(--text);
+}
+
+.sort-tab--active {
+  background: var(--bg-elevated);
+  color: var(--accent);
+  box-shadow: var(--shadow-card);
+}
+
 .card-list {
   display: flex;
   flex-direction: column;
@@ -1233,9 +1279,20 @@ body {
   animation: card-in 0.24s ease-out;
 }
 
+/* 置顶的卡片加一道左侧色条：颜色之外还有位置差异，
+   不依赖颜色也能一眼看出哪几张被钉住了 */
+.card--pinned {
+  border-color: var(--border-strong);
+  box-shadow: inset 3px 0 0 0 var(--accent), var(--shadow-card);
+}
+
 .card:hover {
   border-color: var(--border-strong);
   box-shadow: var(--shadow-raised);
+}
+
+.card--pinned:hover {
+  box-shadow: inset 3px 0 0 0 var(--accent), var(--shadow-raised);
 }
 
 @keyframes card-in {
@@ -1246,6 +1303,24 @@ body {
   to {
     opacity: 1;
     transform: none;
+  }
+}
+
+/* 刚生成的那张卡闪一下：列表按事件时间排，新卡不一定在最上面，
+   不给出这一点视觉反馈，用户会以为没生成成功 */
+.card--new {
+  animation: card-in 0.24s ease-out, card-flash 1.8s ease-out 0.15s;
+}
+
+@keyframes card-flash {
+  0%,
+  55% {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft), var(--shadow-card);
+  }
+  100% {
+    border-color: var(--border);
+    box-shadow: var(--shadow-card);
   }
 }
 
@@ -1310,6 +1385,32 @@ body {
   color: var(--warn);
 }
 
+.chip--pinned {
+  border-color: rgba(180, 100, 63, 0.32);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* 日程是列表排序的依据，给它比普通 chip 更高的对比度 */
+.chip--schedule {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+}
+
+.chip--no-schedule {
+  border-style: dashed;
+  color: var(--text-dim);
+}
+
+/* 已过期的卡片是一整个排序档位，界面上也要看得出来 */
+.chip--expired {
+  border-color: var(--border);
+  background: var(--bg-sunken);
+  color: var(--text-dim);
+}
+
 .card__points {
   margin: 0;
   padding-left: 20px;
@@ -1334,14 +1435,26 @@ body {
   font-size: 13px;
 }
 
+/* 按钮靠左成组，删除单独推到最右：
+   五个按钮再用 space-between 均分会把间距拉得很散 */
 .card__footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 16px;
   padding-top: 12px;
   border-top: 1px solid var(--border);
+}
+
+.card__footer .button--danger {
+  margin-left: auto;
+}
+
+.button--pin-on {
+  border-color: rgba(180, 100, 63, 0.32);
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 
 .card__raw {

@@ -1,5 +1,5 @@
-import { DEFAULT_HIGHLIGHT_STYLE } from '@notification-hub/shared';
-import { useMemo, useState } from 'react';
+import { DEFAULT_HIGHLIGHT_STYLE, isCardSortMode, type CardSortMode } from '@notification-hub/shared';
+import { useCallback, useMemo, useState } from 'react';
 import { CalendarView } from './components/CalendarView';
 import { CardList } from './components/CardList';
 import { IngestForm } from './components/IngestForm';
@@ -8,8 +8,24 @@ import { useCards } from './hooks/useCards';
 import { useSettings } from './hooks/useSettings';
 import { createCardApi, createSettingsApi } from './lib/api';
 import { toIsoDate } from './lib/date';
+import { sortCards } from './lib/sort';
 
 type ViewMode = 'cards' | 'calendar';
+
+const SORT_STORAGE_KEY = 'notification-hub.sort-mode';
+
+/**
+ * 读排序偏好。localStorage 在隐私模式或跨域 iframe 里会直接抛异常，
+ * 所以整段包在 try 里——偏好读不出来只是回到默认值，不该让界面白屏。
+ */
+function readStoredSortMode(): CardSortMode {
+  try {
+    const value = window.localStorage.getItem(SORT_STORAGE_KEY);
+    return isCardSortMode(value) ? value : 'event';
+  } catch {
+    return 'event';
+  }
+}
 
 /**
  * 应用外壳：左侧输入栏 + API 设置，右侧在「卡片列表」与「日历视图」间切换。
@@ -26,14 +42,27 @@ export default function App({ api, settingsApi, today }: AppProps = {}) {
   const cardApi = useMemo(() => api ?? createCardApi(), [api]);
   const settingsClient = useMemo(() => settingsApi ?? createSettingsApi(), [settingsApi]);
 
-  const { cards, loading, submitting, error, dismissError, submit, edit, revisions, clearRevisions, remove } =
+  const { cards, loading, submitting, error, dismissError, submit, lastCreatedId, edit, revisions, clearRevisions, togglePin, remove } =
     useCards(cardApi);
   const settings = useSettings(settingsClient);
   const [view, setView] = useState<ViewMode>('cards');
+  const [sortMode, setSortMode] = useState<CardSortMode>(readStoredSortMode);
 
   const todayIso = today ?? toIsoDate(new Date());
   const highlight = settings.settings?.highlight ?? DEFAULT_HIGHLIGHT_STYLE;
   const scheduledCount = cards.filter((card) => card.schedule !== null).length;
+
+  // 排序只在这里做一次：顶部计数、列表、日历都读同一份结果，才不会出现两处顺序不一致
+  const sortedCards = useMemo(() => sortCards(cards, sortMode, todayIso), [cards, sortMode, todayIso]);
+
+  const changeSort = useCallback((mode: CardSortMode) => {
+    setSortMode(mode);
+    try {
+      window.localStorage.setItem(SORT_STORAGE_KEY, mode);
+    } catch {
+      // 存不下就只当次生效，不值得为此打断用户
+    }
+  }, []);
 
   // 两类提示共用一个位置：错误优先，其次是保存结果
   const message = error ?? settings.error ?? settings.notice;
@@ -111,16 +140,21 @@ export default function App({ api, settingsApi, today }: AppProps = {}) {
 
           {view === 'cards' ? (
             <CardList
-              cards={cards}
+              cards={sortedCards}
               loading={loading}
               onEdit={async (id, patch) => (await edit(id, patch)) !== null}
               onLoadRevisions={revisions}
               onClearRevisions={clearRevisions}
+              onTogglePin={togglePin}
               onDelete={remove}
+              sortMode={sortMode}
+              onChangeSort={changeSort}
+              highlightId={lastCreatedId}
+              today={todayIso}
             />
           ) : (
             <CalendarView
-              cards={cards}
+              cards={sortedCards}
               loading={loading}
               highlight={highlight}
               onSaveHighlight={settings.save}

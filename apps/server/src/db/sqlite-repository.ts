@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS cards (
   keywords       TEXT NOT NULL DEFAULT '{}',
   schedule       TEXT,
   updated_at     TEXT,
-  revision_count INTEGER NOT NULL DEFAULT 0
+  revision_count INTEGER NOT NULL DEFAULT 0,
+  pinned         INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_cards_order ON cards (created_at DESC, seq DESC);
 
@@ -62,6 +63,7 @@ interface CardRow {
   schedule?: string | null;
   updated_at?: string | null;
   revision_count?: number | null;
+  pinned?: number | null;
 }
 
 interface RevisionRow {
@@ -146,6 +148,7 @@ function rowToCard(row: CardRow): InfoCard {
     createdAt: row.created_at,
     updatedAt: row.updated_at ?? null,
     revisionCount: Number(row.revision_count ?? 0),
+    pinned: Number(row.pinned ?? 0) === 1,
   };
 }
 
@@ -200,6 +203,10 @@ function migrate(db: DatabaseSync): void {
   if (!has('revision_count')) {
     db.exec(`ALTER TABLE cards ADD COLUMN revision_count INTEGER NOT NULL DEFAULT 0`);
   }
+  if (!has('pinned')) {
+    // 用 0/1 而不是布尔：SQLite 没有布尔类型
+    db.exec(`ALTER TABLE cards ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`);
+  }
 }
 
 /**
@@ -220,9 +227,10 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
   // 单用户本地应用 + node:sqlite 同步 API，不存在并发插入，MAX(seq)+1 是安全的
   const nextSeqStmt = db.prepare(`SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM cards`);
   const insertStmt = db.prepare(
-    `INSERT INTO cards (id, title, time, source, key_points, raw_text, provider, created_at, seq, keywords, schedule, schedule_computed)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    `INSERT INTO cards (id, title, time, source, key_points, raw_text, provider, created_at, seq, keywords, schedule, schedule_computed, pinned)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
   );
+  const setPinnedStmt = db.prepare(`UPDATE cards SET pinned = ? WHERE id = ?`);
   const deleteStmt = db.prepare(`DELETE FROM cards WHERE id = ?`);
   const updateStmt = db.prepare(
     `UPDATE cards
@@ -301,6 +309,7 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
         Number(next),
         JSON.stringify(card.keywords),
         card.schedule ? JSON.stringify(card.schedule) : null,
+        card.pinned ? 1 : 0,
       );
       return card;
     },
@@ -361,6 +370,13 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
       // 历史没了，计数也该归零；updatedAt 保留，它记录的是"内容最后一次被改的时间"
       resetRevisionCountStmt.run(cardId);
       return removed;
+    },
+
+    setPinned(id, pinned) {
+      const existing = this.get(id);
+      if (!existing) return null;
+      setPinnedStmt.run(pinned ? 1 : 0, id);
+      return this.get(id);
     },
 
     delete(id) {
@@ -457,6 +473,13 @@ export function createMemoryCardRepository(): CardRepository {
       revisions.delete(cardId);
       cards.set(cardId, { ...existing, revisionCount: 0 });
       return removed;
+    },
+    setPinned(id, pinned) {
+      const existing = cards.get(id);
+      if (!existing) return null;
+      const updated = { ...existing, pinned };
+      cards.set(id, updated);
+      return updated;
     },
     delete(id) {
       seqs.delete(id);

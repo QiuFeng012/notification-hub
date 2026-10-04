@@ -13,12 +13,21 @@ export interface UseCardsResult {
   dismissError: () => void;
   /** keywords 是一次性的本次关注点，不进入任何长期配置 */
   submit: (rawText: string, keywords?: string[]) => Promise<boolean>;
+  /**
+   * 最近一次新建卡片的 id，没有则 null。
+   *
+   * 列表是按事件时间排的，新卡片不保证出现在最上面（没有日期的更是直接沉底），
+   * 所以界面需要知道"哪张是刚生成的"，才能把它滚进视野并闪一下。
+   */
+  lastCreatedId: string | null;
   /** 编辑一张卡片；成功返回更新后的卡片，失败返回 null 并设置错误 */
   edit: (id: string, patch: UpdateCardRequest) => Promise<CardView | null>;
   /** 拉取某张卡片的改动历史 */
   revisions: (id: string) => Promise<CardRevision[]>;
   /** 清空某张卡片的改动历史（内容不动） */
   clearRevisions: (id: string) => Promise<void>;
+  /** 置顶 / 取消置顶 */
+  togglePin: (id: string, pinned: boolean) => Promise<void>;
   remove: (id: string) => Promise<void>;
 }
 
@@ -37,6 +46,7 @@ export function useCards(api: CardApi): UseCardsResult {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastCreatedId, setLastCreatedId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,8 +87,9 @@ export function useCards(api: CardApi): UseCardsResult {
       setError(null);
       try {
         const card = await api.createCard(trimmed, keywords);
-        // 新卡插到最前，与列表接口的倒序排列保持一致
+        // 先放进本地列表；最终顺序由界面层的排序决定，这里只管"有这张卡"
         setCards((previous) => [card, ...previous]);
+        setLastCreatedId(card.id);
         return true;
       } catch (caught) {
         setError(toMessage(caught));
@@ -126,6 +137,25 @@ export function useCards(api: CardApi): UseCardsResult {
     [api],
   );
 
+  const togglePin = useCallback(
+    async (id: string, pinned: boolean) => {
+      const snapshot = cards;
+      // 乐观更新：置顶是随手一点的小动作，等一个来回会显得迟钝
+      setCards((previous) =>
+        previous.map((card) => (card.id === id ? { ...card, pinned } : card)),
+      );
+      setError(null);
+      try {
+        const updated = await api.setPinned(id, pinned);
+        setCards((previous) => previous.map((card) => (card.id === id ? updated : card)));
+      } catch (caught) {
+        setCards(snapshot);
+        setError(`置顶失败：${toMessage(caught)}`);
+      }
+    },
+    [api, cards],
+  );
+
   const remove = useCallback(
     async (id: string) => {
       const snapshot = cards;
@@ -148,9 +178,11 @@ export function useCards(api: CardApi): UseCardsResult {
     error,
     dismissError,
     submit,
+    lastCreatedId,
     edit,
     revisions,
     clearRevisions,
+    togglePin,
     remove,
   };
 }

@@ -1,8 +1,8 @@
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_HIGHLIGHT_STYLE } from '@notification-hub/shared';
-import type { SettingsView } from '@notification-hub/shared';
+import type { CardSchedule, SettingsView } from '@notification-hub/shared';
 import App from '../src/App';
 import { ApiError, type CardApi, type SettingsApi } from '../src/lib/api';
 import type { CardView } from '../src/lib/card-view';
@@ -22,6 +22,7 @@ function makeCard(overrides: Partial<CardView> = {}): CardView {
     createdAtLabel: '2025-03-05 14:32',
     updatedAt: null,
     revisionCount: 0,
+    pinned: false,
     ...overrides,
   };
 }
@@ -51,6 +52,12 @@ function createFakeApi(options: FakeApiOptions = {}) {
     updateCard: vi.fn(async (id: string, patch) => makeCard({ id, ...patch })),
     listRevisions: vi.fn(async () => []),
     clearRevisions: vi.fn(async () => undefined),
+    // 置顶要保留卡片原有内容，只翻 pinned——否则测试里会把标题也一起换掉
+    setPinned: vi.fn(async (id: string, pinned: boolean) => ({
+      ...((options.initial ?? []).find((card) => card.id === id) ?? makeCard()),
+      id,
+      pinned,
+    })),
     deleteCard: vi.fn(options.deleteImpl ?? (async () => undefined)),
   };
   return api;
@@ -77,8 +84,8 @@ function createFakeSettingsApi(options: FakeSettingsApiOptions = {}) {
   return api;
 }
 
-function renderApp(api: CardApi, settingsApi: SettingsApi = createFakeSettingsApi()) {
-  return render(<App api={api} settingsApi={settingsApi} />);
+function renderApp(api: CardApi, settingsApi: SettingsApi = createFakeSettingsApi(), today?: string) {
+  return render(<App api={api} settingsApi={settingsApi} today={today} />);
 }
 
 describe('空态', () => {
@@ -98,10 +105,15 @@ describe('空态', () => {
 });
 
 describe('生成信息卡', () => {
-  it('提交原文后新卡片出现在列表最前，输入框被清空', async () => {
+  it('提交原文后新卡片入库，输入框被清空', async () => {
     const api = createFakeApi({
       initial: [makeCard({ id: 'old-id', title: '历史卡片' })],
-      createImpl: async () => makeCard({ id: 'new-id', title: '新生成的卡片' }),
+      createImpl: async () =>
+        makeCard({
+          id: 'new-id',
+          title: '新生成的卡片',
+          createdAt: '2025-03-05T08:00:00.000Z',
+        }),
     });
     renderApp(api);
 
@@ -113,8 +125,9 @@ describe('生成信息卡', () => {
     expect(textarea).toHaveValue('');
     expect(api.createCard).toHaveBeenCalledWith('【教务处】选课通知', []);
 
+    // 两者都没有日期，都落在"无日期"档里，此时按录入时间倒序 → 新的在前
     const titles = screen.getAllByTestId('info-card').map((card) => card.querySelector('.card__title')?.textContent);
-    expect(titles[0]).toBe('新生成的卡片');
+    expect(titles).toEqual(['新生成的卡片', '历史卡片']);
   });
 
   it('Ctrl + Enter 也能提交', async () => {
@@ -636,5 +649,256 @@ describe('卡片上的关注点标注', () => {
     await screen.findByText('选课开放通知');
     expect(document.querySelector('.card__keywords')).toBeNull();
     expect(document.querySelectorAll('mark.keyword-mark')).toHaveLength(0);
+  });
+});
+
+const TODAY = '2026-10-02';
+
+function sched(start: string, end: string = start): CardSchedule {
+  return { start, end, dayCount: 1, label: start, inferredYear: false };
+}
+
+/** 列表当前显示顺序，只看标题 */
+function visibleTitles(): string[] {
+  return screen
+    .getAllByTestId('info-card')
+    .map((element) => element.querySelector('.card__title')?.textContent ?? '');
+}
+
+describe('列表排序', () => {
+  beforeEach(() => {
+    // 排序偏好存在 localStorage，用例之间必须清干净，否则互相污染
+    window.localStorage.clear();
+  });
+
+  // 事件时间与录入时间刻意错开，这样两种排序的结果必然不同，
+  // 只看顺序就能判断用的是哪一种，而不是撞运气撞上同一个排列
+  const threeCards = () => [
+    makeCard({ id: 'c-far', title: '远期通知', schedule: sched('2026-12-01'), createdAt: '2026-10-01T00:00:00.000Z' }),
+    makeCard({ id: 'c-near', title: '临近通知', schedule: sched('2026-10-03'), createdAt: '2026-06-01T00:00:00.000Z' }),
+    makeCard({ id: 'c-past', title: '过期通知', schedule: sched('2026-09-01'), createdAt: '2026-08-01T00:00:00.000Z' }),
+  ];
+
+  it('默认按事件时间排：临近的在前，过期的沉到下面', async () => {
+    renderApp(createFakeApi({ initial: threeCards() }), createFakeSettingsApi(), TODAY);
+    await screen.findByText('临近通知');
+
+    expect(visibleTitles()).toEqual(['临近通知', '远期通知', '过期通知']);
+  });
+
+  it('没有日期的卡片排在最后', async () => {
+    renderApp(
+      createFakeApi({
+        initial: [
+          makeCard({ id: 'c-none', title: '没有日期', schedule: null }),
+          makeCard({ id: 'c-past', title: '过期通知', schedule: sched('2026-09-01') }),
+          makeCard({ id: 'c-near', title: '临近通知', schedule: sched('2026-10-03') }),
+        ],
+      }),
+      createFakeSettingsApi(),
+      TODAY,
+    );
+    await screen.findByText('临近通知');
+
+    expect(visibleTitles()).toEqual(['临近通知', '过期通知', '没有日期']);
+  });
+
+  it('每张卡片都写出日程日期，排序依据可见', async () => {
+    renderApp(createFakeApi({ initial: threeCards() }), createFakeSettingsApi(), TODAY);
+    await screen.findByText('临近通知');
+
+    expect(screen.getAllByTestId('schedule-chip').map((chip) => chip.textContent)).toEqual([
+      '日程10月3日',
+      '日程12月1日',
+      '日程9月1日',
+    ]);
+  });
+
+  it('切到「按录入时间」后最新录入的排最前，无视事件时间', async () => {
+    renderApp(
+      createFakeApi({
+        initial: [
+          makeCard({
+            id: 'c-near',
+            title: '临近通知',
+            schedule: sched('2026-10-03'),
+            createdAt: '2026-01-01T00:00:00.000Z',
+          }),
+          makeCard({
+            id: 'c-far',
+            title: '远期通知',
+            schedule: sched('2026-12-01'),
+            createdAt: '2026-09-30T00:00:00.000Z',
+          }),
+        ],
+      }),
+      createFakeSettingsApi(),
+      TODAY,
+    );
+    await screen.findByText('临近通知');
+
+    await userEvent.click(screen.getByRole('button', { name: '按录入时间' }));
+    expect(visibleTitles()).toEqual(['远期通知', '临近通知']);
+  });
+
+  it('排序偏好被记住，重新挂载后仍然生效', async () => {
+    const { unmount } = renderApp(
+      createFakeApi({ initial: threeCards() }),
+      createFakeSettingsApi(),
+      TODAY,
+    );
+    await screen.findByText('临近通知');
+    await userEvent.click(screen.getByRole('button', { name: '按录入时间' }));
+    unmount();
+
+    renderApp(createFakeApi({ initial: threeCards() }), createFakeSettingsApi(), TODAY);
+    await screen.findByText('临近通知');
+
+    // 按录入时间：远期通知最新录入，所以这次排在最前
+    expect(visibleTitles()).toEqual(['远期通知', '过期通知', '临近通知']);
+    expect(screen.getByRole('button', { name: '按录入时间' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('工具栏写出当前排序规则，避免用户以为是随手排的', async () => {
+    renderApp(createFakeApi({ initial: threeCards() }), createFakeSettingsApi(), TODAY);
+    await screen.findByText('临近通知');
+
+    expect(screen.getByTestId('sort-hint')).toHaveTextContent('临近的在前');
+    await userEvent.click(screen.getByRole('button', { name: '按录入时间' }));
+    expect(screen.getByTestId('sort-hint')).toHaveTextContent('最新生成的排在最前');
+  });
+
+  it('已过期的卡片带「已过期」标记，跨年日程补上年份', async () => {
+    renderApp(
+      createFakeApi({
+        initial: [
+          makeCard({ id: 'c-past', title: '过期通知', schedule: sched('2026-09-01') }),
+          makeCard({ id: 'c-next', title: '明年通知', schedule: sched('2027-03-08') }),
+        ],
+      }),
+      createFakeSettingsApi(),
+      TODAY,
+    );
+    await screen.findByText('过期通知');
+
+    // 「已过期」是排到下面那一档的原因，必须写在卡上——
+    // 否则用户看见 9月1日 排在 明年3月8日 后面会以为排错了
+    const expiredChips = screen.getAllByTestId('expired-chip');
+    expect(expiredChips).toHaveLength(1);
+    expect(screen.getByText('过期通知').closest('[data-testid="info-card"]')).toContainElement(
+      expiredChips[0]!,
+    );
+
+    // 明年的日程如果不写年份，看起来和今年的一模一样
+    expect(screen.getByText('明年通知').closest('[data-testid="info-card"]')).toHaveTextContent(
+      '日程2027年3月8日',
+    );
+  });
+});
+
+describe('置顶', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('点置顶后调用接口，卡片移到列表最前并显示已置顶标记', async () => {
+    const api = createFakeApi({
+      initial: [
+        makeCard({ id: 'c-near', title: '临近通知', schedule: sched('2026-10-03') }),
+        makeCard({ id: 'c-far', title: '远期通知', schedule: sched('2026-12-01') }),
+      ],
+    });
+    renderApp(api, createFakeSettingsApi(), TODAY);
+    await screen.findByText('临近通知');
+    expect(visibleTitles()).toEqual(['临近通知', '远期通知']);
+
+    await userEvent.click(screen.getByRole('button', { name: '置顶信息卡：远期通知' }));
+
+    await waitFor(() => expect(visibleTitles()).toEqual(['远期通知', '临近通知']));
+    expect(api.setPinned).toHaveBeenCalledWith('c-far', true);
+    expect(screen.getByTestId('pinned-badge')).toHaveTextContent('已置顶');
+  });
+
+  it('已置顶的卡片可以取消置顶，取消后回到原来的位置', async () => {
+    const api = createFakeApi({
+      initial: [
+        makeCard({ id: 'c-near', title: '临近通知', schedule: sched('2026-10-03') }),
+        makeCard({ id: 'c-far', title: '远期通知', schedule: sched('2026-12-01'), pinned: true }),
+      ],
+    });
+    renderApp(api, createFakeSettingsApi(), TODAY);
+    await screen.findByText('临近通知');
+    expect(visibleTitles()).toEqual(['远期通知', '临近通知']);
+
+    await userEvent.click(screen.getByRole('button', { name: '取消置顶信息卡：远期通知' }));
+
+    await waitFor(() => expect(visibleTitles()).toEqual(['临近通知', '远期通知']));
+    expect(api.setPinned).toHaveBeenCalledWith('c-far', false);
+  });
+
+  it('置顶失败时回滚位置并给出提示', async () => {
+    const api = createFakeApi({
+      initial: [
+        makeCard({ id: 'c-near', title: '临近通知', schedule: sched('2026-10-03') }),
+        makeCard({ id: 'c-far', title: '远期通知', schedule: sched('2026-12-01') }),
+      ],
+    });
+    api.setPinned = vi.fn(async () => {
+      throw new ApiError('CARD_NOT_FOUND', '信息卡不存在或已被删除', 404);
+    });
+    renderApp(api, createFakeSettingsApi(), TODAY);
+    await screen.findByText('临近通知');
+
+    await userEvent.click(screen.getByRole('button', { name: '置顶信息卡：远期通知' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('置顶失败');
+    // 乐观更新必须回滚，否则界面会显示一个服务端并不认可的状态
+    await waitFor(() => expect(visibleTitles()).toEqual(['临近通知', '远期通知']));
+    expect(screen.queryByTestId('pinned-badge')).not.toBeInTheDocument();
+  });
+
+  it('置顶不增加改动次数，也不显示已修改标记', async () => {
+    const api = createFakeApi({ initial: [makeCard({ id: 'c-1', title: '通知' })] });
+    renderApp(api, createFakeSettingsApi(), TODAY);
+    await screen.findByText('通知');
+
+    await userEvent.click(screen.getByRole('button', { name: '置顶信息卡：通知' }));
+
+    await waitFor(() => expect(screen.getByTestId('pinned-badge')).toBeInTheDocument());
+    expect(screen.queryByTestId('edited-badge')).not.toBeInTheDocument();
+  });
+});
+
+describe('新建卡片的定位', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it('新生成的卡片即使被排到列表末尾，也会滚进视野并闪一下', async () => {
+    const scrollIntoView = vi.fn();
+    // jsdom 没有实现 scrollIntoView，这里补一个以验证调用
+    Element.prototype.scrollIntoView = scrollIntoView;
+
+    const api = createFakeApi({
+      initial: [makeCard({ id: 'c-near', title: '已有通知', schedule: sched('2026-10-03') })],
+      createImpl: async () =>
+        makeCard({ id: 'c-new', title: '刚生成的通知', schedule: null, createdAt: '2026-10-02T00:00:00.000Z' }),
+    });
+    renderApp(api, createFakeSettingsApi(), TODAY);
+    await screen.findByText('已有通知');
+
+    await userEvent.type(screen.getByLabelText('通知原文'), '一条新通知');
+    await userEvent.click(screen.getByRole('button', { name: '生成信息卡' }));
+
+    await screen.findByText('刚生成的通知');
+    // 没有日期的卡片按事件时间排会沉到最下面，所以必须主动告诉用户它在哪
+    expect(visibleTitles()).toEqual(['已有通知', '刚生成的通知']);
+    expect(scrollIntoView).toHaveBeenCalled();
+
+    const newCard = screen.getByText('刚生成的通知').closest('[data-testid="info-card"]');
+    expect(newCard).toHaveClass('card--new');
   });
 });

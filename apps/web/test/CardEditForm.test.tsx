@@ -21,6 +21,7 @@ function makeCard(overrides: Partial<CardView> = {}): CardView {
     createdAtLabel: '2026-09-20 14:32',
     updatedAt: null,
     revisionCount: 0,
+    pinned: false,
     ...overrides,
   };
 }

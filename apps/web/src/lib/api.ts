@@ -78,6 +78,8 @@ export interface CardApi {
   listRevisions(id: string): Promise<CardRevision[]>;
   /** 清空某张卡片的改动历史（内容不动） */
   clearRevisions(id: string): Promise<void>;
+  /** 置顶 / 取消置顶；返回更新后的卡片 */
+  setPinned(id: string, pinned: boolean): Promise<CardView>;
   deleteCard(id: string): Promise<void>;
 }
 
@@ -129,6 +131,19 @@ export function createCardApi(): CardApi {
 
     async clearRevisions(id: string) {
       await requestJson(`/api/cards/${encodeURIComponent(id)}/revisions`, { method: 'DELETE' });
+    },
+
+    async setPinned(id: string, pinned: boolean) {
+      const payload = (await requestJson(`/api/cards/${encodeURIComponent(id)}/pinned`, {
+        method: 'PUT',
+        json: { pinned },
+      })) as InfoCard;
+
+      const view = toCardView(payload);
+      if (!view) {
+        throw new ApiError('INVALID_RESPONSE', '服务端返回的信息卡格式不正确', 500);
+      }
+      return view;
     },
 
     async deleteCard(id: string) {
