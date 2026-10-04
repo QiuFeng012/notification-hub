@@ -171,6 +171,42 @@ cp .env.example .env    # 可选：填入 DEEPSEEK_API_KEY
 
 **没有 API Key 也能直接跑通全流程**：此时会使用内置的本地启发式摘要器（关键词 + 日期规则挑句子），产出的卡片会明确标注为「启发式摘要」而不是「AI 摘要」。配置 Key 后自动切换为 DeepSeek 真实总结，标注变为「AI 摘要」。
 
+## 装成独立应用（PWA）
+
+默认用法是开一个浏览器标签页。想让它像一个真正的应用——**独立窗口、开始菜单图标、没有地址栏**——
+可以把它装下来：
+
+1. 双击 `启动信息整合台.bat`（保证服务在跑）
+2. 在 Edge / Chrome 里打开 <http://127.0.0.1:5178>
+3. 点地址栏右侧的**安装图标**（Edge 也可以在「…」菜单 → 应用 → 将此站点作为应用安装）
+4. 之后就从开始菜单启动，不用再经过浏览器
+
+装完之后有**两个入口，行为不同**，按需要选：
+
+| 入口 | 行为 |
+| --- | --- |
+| 开始菜单里的「信息整合台」 | 独立窗口，没有地址栏；**服务没在跑时会显示一张说明页** |
+| `启动信息整合台.bat` | 先确认服务在跑，再用浏览器标签页打开 |
+
+**它仍然是本地应用，不是离线应用。** 数据、AI 调用、界面响应都在本机的服务端进程里，
+所以服务没起来时这个窗口没有内容可显示——这时它会显示一张说明页告诉你去双击启动脚本，
+而不是浏览器那句 `ERR_CONNECTION_REFUSED`。
+
+几个刻意的设计：
+
+- **service worker 不缓存任何应用代码**，只缓存那一张说明页。
+  缓存应用代码的代价是"重新构建之后打开的还是旧界面"，而且旧到让人以为改动没生效；
+  这个项目界面改得很勤，这种问题最难查。`/api/` 也一律直连——
+  缓存住的旧卡片比连不上更糟。
+- **图标只有一份矢量来源**：`scripts/build-icons.mts` 里的 SVG，由浏览器栅格化成 PNG。
+  PNG 和 favicon 的 SVG 出自同一份定义，不存在"改了一个忘了另一个"。
+  改了图标跑一次 `npx tsx scripts/build-icons.mts` 重新生成（产物提交进仓库）。
+- 装的时候地址栏里是什么地址，装出来的就是哪个应用：`127.0.0.1:5178` 和
+  `localhost:5178` 是**两个不同的来源**，会装出两个互不相干的图标。建议固定用一个。
+
+**卸载**：在 Edge / Chrome 里打开 `edge://apps`（或 `chrome://apps`），
+在「信息整合台」上右键 → 卸载。`data/` 里的数据不受影响。
+
 ## 配置 API Key
 
 Key 有两种给法，**优先级：界面配置 > 环境变量**。
@@ -206,7 +242,7 @@ pnpm dev            # 终端 2：前端 http://127.0.0.1:5173（Vite HMR，/api 
 ```bash
 pnpm verify           # 类型检查 + 全部单元/组件测试
 pnpm smoke            # 真实链路冒烟：真客户端打真服务端（需先启动服务）
-pnpm verify:ui        # 真实界面验证：无头浏览器点击删除按钮（需先启动服务）
+pnpm verify:ui        # 真实界面验证：无头浏览器点击删除/置顶/排序，并核对可安装性（需先启动服务）
 pnpm verify:launcher  # 启动器脚本验证：语法 + 真实启停循环
 ```
 
@@ -218,6 +254,33 @@ pnpm verify:launcher  # 启动器脚本验证：语法 + 真实启停循环
 `pnpm verify:launcher` 用于验证双击启动链路。PowerShell 脚本有两类只有真跑才会暴露的问题：
 语法解析器查不出参数默认值错误（`$PSScriptRoot` 在参数默认值求值时还是空串），
 以及 `.env` 不存在时索引 null 导致脚本以失败退出——双击时用户只会看到窗口一闪而过。
+
+### 需要人工核对的一项：服务没在跑时的说明页
+
+这条**没有**进 `pnpm verify:ui`，两个原因都值得记下来：
+
+1. 它要求真的把服务停掉再拉起来。让界面验证脚本去管服务生命周期，既会动你正在跑的服务，
+   又让验证本身变得不稳（实测出现过卡住不返回）。启停是 `verify:launcher` 的职责，
+   两边都碰就会分叉。
+2. CDP 的 `Network.emulateNetworkConditions({ offline: true })` 试过了，**不能用**：
+   它在请求到达 service worker 之前就把导航掐掉，页面直接变成浏览器错误页——
+   看上去"验过了一条类似的检查"，其实根本没走到要验的那段代码。
+
+所以这条按下面的步骤人工核对（改动了 `public/sw.js` 或 `public/offline.html` 时应该做一次）：
+
+```powershell
+# 1. 服务在跑的前提下，先用浏览器打开一次 http://127.0.0.1:5178（让 service worker 完成注册）
+# 2. 停掉服务
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stop-server.ps1
+# 3. 刷新刚才那个页面：应该看到「服务没有在运行」的说明页，而不是 ERR_CONNECTION_REFUSED
+# 4. 把服务拉回来
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/start-server.ps1 -NoBrowser
+```
+
+自动化覆盖到的部分：离线回落的**判断逻辑**由 `apps/web/test/service-worker.test.ts`
+真跑 `public/sw.js` 源码覆盖（非导航请求、`/api/`、跨域一律不接管；网络失败才回落到说明页）；
+缓存的**边界**由 `pnpm verify:ui` 在真实浏览器里断言——`caches.keys()` 里只有一个桶，
+里面**只有 `/offline.html`，没有任何应用代码**。
 
 ## 目录结构
 
@@ -231,8 +294,9 @@ apps/server/          后端：Fastify + node:sqlite
   test/               接口、仓储、摘要器、设置、配置的测试
 apps/web/             前端：React + Vite
   src/components/     输入栏、信息卡、信息卡列表、API 设置面板
-  src/hooks/          useCards：加载 / 提交 / 删除；useSettings：读取 / 保存 / 清除
-  src/lib/            API 客户端、卡片视图归一化
+  src/hooks/          useCards：加载 / 提交 / 删除 / 置顶；useSettings：读取 / 保存 / 清除
+  src/lib/            API 客户端、卡片视图归一化、列表排序
+  public/             manifest / service worker / 离线说明页 / 图标（图标由脚本生成）
   test/               组件与工具函数的测试
 packages/shared/      前后端共享的信息卡与设置类型定义
 scripts/              启动器与验证脚本
@@ -242,6 +306,7 @@ scripts/              启动器与验证脚本
   status.ps1          查询服务状态
   smoke.mts           真实链路冒烟
   ui-delete-check.mts 无头浏览器点击验证
+  build-icons.mts     从内联 SVG 生成 PWA 图标（浏览器负责栅格化）
   screenshot.mts      无头浏览器截图（改动界面后肉眼核对用）
   verify-launcher.ps1 启动器脚本验证
 ```

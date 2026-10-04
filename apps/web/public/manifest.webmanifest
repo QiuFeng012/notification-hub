@@ -1,0 +1,34 @@
+{
+  "id": "/",
+  "name": "信息整合台",
+  "short_name": "信息整合台",
+  "description": "个人用信息整合工具：粘贴通知原文，AI 提炼要点，生成信息卡，数据只存在本机",
+  "lang": "zh-CN",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "theme_color": "#faf8f3",
+  "background_color": "#faf8f3",
+  "prefer_related_applications": false,
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "type": "image/png",
+      "sizes": "512x512",
+      "purpose": "maskable"
+    }
+  ]
+}

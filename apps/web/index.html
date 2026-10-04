@@ -5,6 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>信息整合台</title>
     <meta name="description" content="个人用信息整合工具：粘贴通知原文，AI 提炼要点，生成信息卡" />
+
+    <!--
+      可安装（PWA）：装完之后是一个独立窗口，有自己的图标，没有地址栏。
+      服务端仍然要在这台机器上跑着——这是本地应用，不是离线应用。
+      判定条件只涉及 manifest，不要求 service worker；sw.js 只负责
+      "服务没在跑"时给一张说明页。
+    -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <meta name="theme-color" content="#faf8f3" />
   </head>
   <body>
     <div id="root"></div>

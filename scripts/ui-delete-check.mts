@@ -79,7 +79,6 @@ interface CdpMessage {
   result?: { result?: { value?: unknown } };
   error?: { message: string };
 }
-
 /** 极简 CDP 客户端：只需要 Runtime.evaluate */
 function createCdp(wsUrl: string) {
   const socket = new WebSocket(wsUrl);
@@ -101,6 +100,16 @@ function createCdp(wsUrl: string) {
 
   return {
     ready,
+    /** 任意 CDP 命令；用来在文档创建前注入脚本 */
+    async send<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+      const id = nextId;
+      nextId += 1;
+      const promise = new Promise<CdpMessage>((resolve) => pending.set(id, resolve));
+      socket.send(JSON.stringify({ id, method, params }));
+      const message = await promise;
+      if (message.error) throw new Error(`${method}: ${message.error.message}`);
+      return message.result as unknown as T;
+    },
     async evaluate<T>(expression: string): Promise<T> {
       const id = nextId;
       nextId += 1;
@@ -293,6 +302,87 @@ async function main(): Promise<void> {
     .then((body) => body.total)
     .catch(() => -1);
   check('服务端条数与界面一致', serverTotal === finalCount, `服务端 ${serverTotal}，界面 ${finalCount}`);
+
+  // 放在最后：这一步会短暂断网，不能影响前面依赖网络的检查
+  console.log('8. PWA：manifest、service worker 与缓存边界');
+  const manifestResult = await cdp.evaluate<string>(`
+    (async () => {
+      const link = document.querySelector('link[rel="manifest"]');
+      if (!link) return '页面没有挂 manifest';
+      const response = await fetch(link.getAttribute('href'));
+      if (!response.ok) return 'manifest HTTP ' + response.status;
+      const manifest = await response.json();
+      if (!manifest.name || !manifest.start_url || manifest.display !== 'standalone') {
+        return 'manifest 缺字段：' + JSON.stringify({ name: manifest.name, start_url: manifest.start_url, display: manifest.display });
+      }
+      const sizes = (manifest.icons || []).map((icon) => icon.sizes);
+      if (!sizes.includes('192x192') || !sizes.includes('512x512')) return '图标尺寸不全：' + sizes.join(',');
+      return 'ok';
+    })()
+  `);
+  check('页面取到的 manifest 满足 Chromium 的安装条件', manifestResult === 'ok', manifestResult);
+
+  // 再问浏览器一遍：它自己解析出来的 manifest 有没有报错。
+  // 这条比人工核对字段更接近真相——解析规则、图标尺寸、字段合法性都由它判定。
+  //
+  // 这里本来想验 beforeinstallprompt（浏览器认定可安装时才发），实测无头模式
+  // 下它不触发：安装引导是纯 UI 功能，无头浏览器不跑它。留一条永远为假的断言
+  // 比不写还糟，所以改用 getAppManifest。
+  const appManifest = await cdp.send<{ errors?: unknown[]; data?: string }>('Page.getAppManifest');
+  const manifestErrors = appManifest.errors ?? [];
+  check(
+    '浏览器解析 manifest 没有报错',
+    manifestErrors.length === 0,
+    JSON.stringify(manifestErrors),
+  );
+  check('浏览器确实拿到了 manifest 内容', (appManifest.data ?? '').includes('信息整合台'));
+
+  const workerResult = await cdp.evaluate<string>(`
+    (async () => {
+      if (!('serviceWorker' in navigator)) return '浏览器不支持 service worker';
+      const registration = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise((resolve) => setTimeout(() => resolve(null), 8000)),
+      ]);
+      if (!registration) return 'service worker 8 秒内没有就绪';
+      if (!registration.active) return '注册了但没有 active worker';
+      const expected = new URL('/sw.js', location.origin).href;
+      if (registration.active.scriptURL !== expected) return '脚本地址不对：' + registration.active.scriptURL;
+      if (!navigator.serviceWorker.controller) return '已安装但当前页面没有被它接管';
+      return 'ok';
+    })()
+  `);
+  check('service worker 已注册、已激活并接管当前页面', workerResult === 'ok', workerResult);
+
+  const cacheResult = await cdp.evaluate<string>(`
+    (async () => {
+      const names = await caches.keys();
+      if (names.length !== 1) return '缓存桶数量不对：' + JSON.stringify(names);
+      const cache = await caches.open(names[0]);
+      const requests = await cache.keys();
+      return JSON.stringify(requests.map((request) => new URL(request.url).pathname).sort());
+    })()
+  `);
+  // 这条是这次改动最要紧的约束：一个字节的应用代码都不许进缓存，
+  // 否则重新构建之后打开的还是旧界面，而且旧到让人以为改动没生效
+  check(
+    '缓存里只有那张离线说明页，没有任何应用代码',
+    cacheResult === JSON.stringify(['/offline.html']),
+    cacheResult,
+  );
+
+  // 这里**故意不**验证"服务停了之后 service worker 交出说明页"那一条，两个原因：
+  //
+  //   1. 那条路径要求真的把服务停掉再拉起来。让这个脚本去管服务生命周期，
+  //      既会动用户正在跑的服务，又让验证本身变得不稳（实测出现过卡住不返回）。
+  //      启停是 verify-launcher 的职责，两边都碰就会分叉——项目里已经有过教训。
+  //   2. CDP 的 Network.emulateNetworkConditions({offline:true}) 试过了，不能用：
+  //      它在请求到达 service worker 之前就把导航掐掉，页面变成浏览器错误页，
+  //      看上去"验过了一条类似的检查"，其实根本没走到要验的那段代码。
+  //
+  // 所以那条留在人工核对里（README「验证」一节写了步骤），
+  // 离线回落的**逻辑**由 test/service-worker.test.ts 真跑 sw.js 源码覆盖，
+  // 缓存的**边界**由上面这条断言在真实浏览器里覆盖。
 
   console.log(process.exitCode === 1 ? '\n界面验证失败' : '\n界面验证全部通过');
   cdp.close();

@@ -1,0 +1,31 @@
+feat(web): 支持装成独立应用（PWA），不再只有浏览器标签页
+
+用户要的是「独立窗口 + 一个图标」，不是改部署模型。所以按 PWA 做：
+Chromium 的可安装性只要求 manifest（name、192/512 图标、start_url、
+display），不要求 service worker，127.0.0.1 带端口也算合格来源。
+Electron 在这个目标下是过度投入——它 150MB 买的是 Chromium，而系统里本来就有浏览器。
+
+service worker 只为「服务没在跑」这一个场景存在，并且**不缓存任何应用代码**：
+这是本地应用，离线使用没有意义，而缓存应用代码的代价是"重新构建之后打开的还是
+旧界面"，旧到让人以为改动没生效。所以只接管导航请求，/api/ 与静态资源一律不碰，
+网络失败时才交付缓存里那一张说明页。装完之后没起服务会看到说明页，
+而不是浏览器的 ERR_CONNECTION_REFUSED。
+
+图标只有一份来源：build-icons.mts 里内联的 SVG，由浏览器栅格化成 PNG。
+装 sharp/node-canvas 会引入原生依赖，与"服务端零原生依赖"的取向冲突；
+而浏览器本来就在（screenshot / verify:ui 都要用）。svg 与 png 出自同一份定义，
+不存在改了一个忘了另一个。
+
+验证：
+- pnpm verify（255 + 272 全绿）：manifest 字段与图标尺寸按 PNG 头核对、
+  sw.js 的判断逻辑由真跑源码的测试覆盖
+- pnpm smoke：真实服务端的 MIME（application/manifest+json、sw.js 是 JS）、
+  图标可访问、offline.html 没有被 SPA 回退成 index.html
+- pnpm verify:ui：真实浏览器里 manifest 无解析错误、service worker 已激活并接管、
+  caches 里只有一个桶且只有 /offline.html 一个条目
+- 肉眼核对离线说明页的渲染
+
+一处刻意留白：见 README「需要人工核对的一项」。让 verify:ui 去停服务再拉起来
+会让它管起服务生命周期，实测出现过卡住不返回；启停是 verify-launcher 的职责。
+CDP 的断网模拟则完全不能用——它在请求到达 service worker 之前就掐掉导航，
+会"通过"一条其实没走到目标代码的检查。

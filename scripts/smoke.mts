@@ -121,6 +121,63 @@ async function main(): Promise<void> {
   });
   check('字段类型不对返回 400', wrongType.status === 400, `HTTP ${wrongType.status}`);
 
+  console.log('8. PWA 静态资源（可安装性全押在这些响应上）');
+  // 这些文件由 @fastify/static 按扩展名猜 MIME。猜错不会报错，只会"装不上"，
+  // 而且单元测试碰不到——所以必须打真实服务端。
+  const manifestResponse = await fetch(`${baseUrl}/manifest.webmanifest`);
+  check('GET /manifest.webmanifest 返回 200', manifestResponse.ok, `HTTP ${manifestResponse.status}`);
+  const manifestType = manifestResponse.headers.get('content-type') ?? '';
+  check(
+    'Content-Type 是 application/manifest+json',
+    manifestType.includes('application/manifest+json'),
+    manifestType,
+  );
+
+  const manifestText = await manifestResponse.text();
+  let manifest: { name?: unknown; start_url?: unknown; icons?: Array<{ src?: string; sizes?: string }> } = {};
+  try {
+    manifest = JSON.parse(manifestText) as typeof manifest;
+  } catch {
+    check('manifest 是合法 JSON', false, manifestText.slice(0, 80));
+  }
+  check('manifest 有 name', typeof manifest.name === 'string' && manifest.name.length > 0);
+  check('start_url 是站内路径', String(manifest.start_url ?? '').startsWith('/'));
+
+  const iconSizes = (manifest.icons ?? []).map((icon) => String(icon.sizes));
+  check(
+    '图标同时覆盖 192 与 512',
+    iconSizes.includes('192x192') && iconSizes.includes('512x512'),
+    iconSizes.join(' / '),
+  );
+
+  for (const icon of manifest.icons ?? []) {
+    const response = await fetch(`${baseUrl}${String(icon.src)}`);
+    const type = response.headers.get('content-type') ?? '';
+    check(
+      `${String(icon.src)} 可访问且是 PNG`,
+      response.ok && type.includes('image/png'),
+      `HTTP ${response.status} ${type}`,
+    );
+  }
+
+  const swResponse = await fetch(`${baseUrl}/sw.js`);
+  const swType = swResponse.headers.get('content-type') ?? '';
+  check('GET /sw.js 返回 200', swResponse.ok, `HTTP ${swResponse.status}`);
+  // 浏览器拒绝用非 JavaScript MIME 注册 service worker
+  check('sw.js 的 MIME 是 JavaScript', /javascript/.test(swType), swType);
+
+  const offlineResponse = await fetch(`${baseUrl}/offline.html`);
+  const offlineBody = await offlineResponse.text();
+  check('GET /offline.html 返回 200', offlineResponse.ok, `HTTP ${offlineResponse.status}`);
+  check(
+    'offline.html 没有被 SPA 回退成 index.html',
+    offlineBody.includes('服务没有在运行') && !offlineBody.includes('/src/main.tsx'),
+    offlineBody.slice(0, 60),
+  );
+
+  const shell = await (await fetch(`${baseUrl}/`)).text();
+  check('首页挂上了 manifest', shell.includes('/manifest.webmanifest'));
+
   console.log(process.exitCode === 1 ? '\n冒烟测试失败' : '\n冒烟测试全部通过');
 }
 
