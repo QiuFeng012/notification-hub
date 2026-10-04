@@ -11,6 +11,7 @@ import {
 import App from '../src/App';
 import type { CardApi, SettingsApi } from '../src/lib/api';
 import type { CardView } from '../src/lib/card-view';
+import { PAGE_HASHES } from '../src/lib/route';
 
 const TODAY = '2025-03-05';
 
@@ -95,13 +96,19 @@ function makeApis(
   return { cardApi, settingsApi };
 }
 
+/** 日历属于信息卡收集页，所以先把地址栏设到那一页再渲染 */
+function renderCardsApp(cardApi: CardApi, settingsApi: SettingsApi) {
+  window.location.hash = PAGE_HASHES.cards;
+  return render(<App api={cardApi} settingsApi={settingsApi} today={TODAY} />);
+}
+
 async function openCalendar(
   cards: CardView[],
   settings?: SettingsView,
   options: ApiOptions = {},
 ) {
   const { cardApi, settingsApi } = makeApis(cards, settings, options);
-  render(<App api={cardApi} settingsApi={settingsApi} today={TODAY} />);
+  renderCardsApp(cardApi, settingsApi);
   await userEvent.click(await screen.findByRole('tab', { name: '日历视图' }));
   return { cardApi, settingsApi };
 }
@@ -137,9 +144,9 @@ function spansInWeek(weekDate: string): HTMLElement[] {
 }
 
 describe('视图切换', () => {
-  it('默认显示卡片列表', async () => {
+  it('信息卡页默认显示卡片列表', async () => {
     const { cardApi, settingsApi } = makeApis([makeCard()]);
-    render(<App api={cardApi} settingsApi={settingsApi} today={TODAY} />);
+    renderCardsApp(cardApi, settingsApi);
 
     expect(await screen.findByTestId('info-card')).toBeInTheDocument();
     expect(screen.queryByTestId('calendar-week')).not.toBeInTheDocument();
@@ -156,7 +163,7 @@ describe('视图切换', () => {
     expect(await screen.findByTestId('info-card')).toBeInTheDocument();
   });
 
-  it('顶部徽标在日历视图显示有日期的条数', async () => {
+  it('页头计数在日历视图改为显示有日期的条数', async () => {
     await openCalendar([
       makeCard({ id: 'a', schedule: schedule('2025-03-05') }),
       makeCard({ id: 'b', schedule: null }),
@@ -237,6 +244,7 @@ describe('圆形日期与周排版', () => {
 
   it('闰年 2 月排 29 天', async () => {
     const { cardApi, settingsApi } = makeApis([]);
+    window.location.hash = PAGE_HASHES.cards;
     render(<App api={cardApi} settingsApi={settingsApi} today="2024-02-10" />);
     await userEvent.click(await screen.findByRole('tab', { name: '日历视图' }));
 
@@ -390,6 +398,7 @@ describe('未排期与空态', () => {
       setPinned: vi.fn(async (id: string, pinned: boolean) => makeCard({ id, pinned })),
       deleteCard: vi.fn(async () => undefined),
     };
+    window.location.hash = PAGE_HASHES.cards;
     render(<App api={cardApi} settingsApi={makeApis([]).settingsApi} today={TODAY} />);
     await userEvent.click(await screen.findByRole('tab', { name: '日历视图' }));
 

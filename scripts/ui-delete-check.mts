@@ -165,33 +165,127 @@ async function main(): Promise<void> {
     cdp.evaluate<string[]>(
       `[...document.querySelectorAll('[data-testid="info-card"]')].map((el) => el.dataset.cardId)`,
     );
+  /** 点页头右上角的导航按钮；返回是否找到了那个按钮 */
+  const clickNav = (text: string) =>
+    cdp.evaluate<boolean>(`
+      (() => {
+        const button = [...document.querySelectorAll('.nav-button')]
+          .find((item) => item.textContent.includes(${JSON.stringify(text)}));
+        if (!button) return false;
+        button.click();
+        return true;
+      })()
+    `);
 
-  console.log('1. 页面加载');
+  console.log('1. 首页：标题 + 通知输入模块');
   const title = await cdp.evaluate<string>(`document.querySelector('.app__title')?.textContent ?? ''`);
   check('页面标题正确', title === '信息整合台', `实际 "${title}"`);
+  // 首页既可能是空 hash（直接打开根地址），也可能是 #/。
+  // 不去把它改写成规范形式：那样会在历史里多插一条，
+  // 用户按后退反而像是"没反应"。
+  const isHome = () =>
+    cdp.evaluate<boolean>(`location.hash === '' || location.hash === '#/'`);
+  check('默认停在首页', await isHome(), await cdp.evaluate<string>('location.hash'));
+  check('首页有通知输入模块', await cdp.evaluate<boolean>(`Boolean(document.querySelector('#raw-text'))`));
+  check(
+    '首页不展示卡片列表（要看得点进信息卡页）',
+    (await cardCount()) === 0,
+    `首页出现了 ${await cardCount()} 张卡`,
+  );
+
+  console.log('2. 页头导航：信息卡页 / 设置页 / 点标题回首页');
+  check('点了「信息卡」按钮', await clickNav('信息卡'));
+  await sleep(600);
+  check(
+    '切到信息卡页，地址栏同步',
+    (await cdp.evaluate<string>('location.hash')) === '#/cards',
+    await cdp.evaluate<string>('location.hash'),
+  );
 
   const before = await cardCount();
   const beforeIds = await cardIds();
   // 一张卡都没有也能跑：脚本只动自己新建的那张，绝不碰已有数据
-  console.log(`     当前渲染 ${before} 张卡${before === 0 ? '（空库）' : ''}`);
+  console.log(`     信息卡页当前渲染 ${before} 张卡${before === 0 ? '（空库）' : ''}`);
 
-  console.log('2. 通过界面提交一条通知');
-  const submitted = await cdp.evaluate<boolean>(`
+  check('点了「设置」按钮', await clickNav('设置'));
+  await sleep(600);
+  const settingsState = await cdp.evaluate<string>(`
+    (() => {
+      const hash = location.hash;
+      const api = [...document.querySelectorAll('.settings-section__title')]
+        .map((item) => item.textContent);
+      const planned = document.querySelectorAll('[data-testid="planned-badge"]').length;
+      const hasKeyInput = Boolean(document.querySelector('#api-key-input'));
+      return JSON.stringify({ hash, api, planned, hasKeyInput });
+    })()
+  `);
+  const settings = JSON.parse(settingsState) as {
+    hash: string;
+    api: string[];
+    planned: number;
+    hasKeyInput: boolean;
+  };
+  check('切到设置页，地址栏同步', settings.hash === '#/settings', settings.hash);
+  check('API 调用已经放进设置页', settings.hasKeyInput && settings.api.includes('API 调用'), settingsState);
+  check('预留了「外观风格」与「开机自启」', settings.planned === 2, `占位分组 ${settings.planned} 个`);
+  check(
+    '占位项明确标注了还没实现',
+    await cdp.evaluate<boolean>(
+      `document.body.textContent.includes('待实现') && document.body.textContent.includes('没做的原因')`,
+    ),
+  );
+
+  check('点标题回首页', await cdp.evaluate<boolean>(`
+    (() => {
+      const button = document.querySelector('.app__title-button');
+      if (!button) return false;
+      button.click();
+      return true;
+    })()
+  `));
+  await sleep(600);
+  check('回到首页', await isHome(), await cdp.evaluate<string>('location.hash'));
+
+  console.log('3. 在首页提交一条通知');
+  const submitted = await cdp.evaluate<string>(`
     (async () => {
       const textarea = document.querySelector('#raw-text');
+      if (!textarea) return '首页找不到输入框';
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
       setter.call(textarea, '【界面验证】请于3月8日24:00前提交报名表，逾期不再受理。');
       textarea.dispatchEvent(new Event('input', { bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 50));
       document.querySelector('.button--primary').click();
-      const ok = await window.__waitFor(() =>
-        document.querySelectorAll('[data-testid="info-card"]').length === ${before} + 1);
-      return Boolean(ok);
+      // 首页看不到卡片列表，所以这里等的是"已生成"那行提示
+      const ok = await window.__waitFor(() => document.querySelector('.home__result'));
+      if (!ok) {
+        const alert = document.querySelector('[role="alert"]');
+        return 'failed: ' + (alert ? alert.textContent : '没有出现生成结果提示');
+      }
+      return document.querySelector('.home__result').textContent;
     })()
   `);
-  check('提交后卡片数 +1', submitted);
+  check('提交后首页给出「已生成」反馈', submitted.startsWith('已生成信息卡'), submitted);
+
+  console.log('4. 从反馈进信息卡页，确认新卡片在列表里');
+  check('点了「去信息卡页查看」', await cdp.evaluate<boolean>(`
+    (() => {
+      const button = [...document.querySelectorAll('.home__result button')]
+        .find((item) => item.textContent.trim() === '去信息卡页查看');
+      if (!button) return false;
+      button.click();
+      return true;
+    })()
+  `));
+  await sleep(800);
+  check(
+    '进到信息卡页',
+    (await cdp.evaluate<string>('location.hash')) === '#/cards',
+    await cdp.evaluate<string>('location.hash'),
+  );
 
   const afterSubmit = await cardCount();
+  check('卡片数 +1', afterSubmit === before + 1, `${before} -> ${afterSubmit}`);
   console.log(`     现在渲染 ${afterSubmit} 张卡`);
 
   // 列表是按事件时间排的，新卡片不一定在第一张，
@@ -202,7 +296,7 @@ async function main(): Promise<void> {
 
   const selector = `[data-card-id="${newId}"]`;
 
-  console.log('3. 点击新卡片上的「置顶」按钮');
+  console.log('5. 点击新卡片上的「置顶」按钮');
   const pinResult = await cdp.evaluate<string>(`
     (async () => {
       const card = document.querySelector(${JSON.stringify(selector)});
@@ -229,7 +323,7 @@ async function main(): Promise<void> {
     JSON.stringify(serverCards?.cards.find((card) => card.id === newId)),
   );
 
-  console.log('4. 再点一次「取消置顶」');
+  console.log('6. 再点一次「取消置顶」');
   const unpinResult = await cdp.evaluate<string>(`
     (async () => {
       const card = document.querySelector(${JSON.stringify(selector)});
@@ -246,7 +340,7 @@ async function main(): Promise<void> {
   `);
   check('取消置顶后标记消失', unpinResult === 'ok', unpinResult);
 
-  console.log('5. 切换排序方式');
+  console.log('7. 切换排序方式');
   const sortResult = await cdp.evaluate<string>(`
     (async () => {
       const tab = [...document.querySelectorAll('.sort-tab')]
@@ -267,7 +361,7 @@ async function main(): Promise<void> {
   `);
   check('可以切到「按录入时间」并回到「按事件时间」', sortResult === 'ok', sortResult);
 
-  console.log('6. 点击新卡片的「删除」按钮');
+  console.log('8. 点击新卡片的「删除」按钮');
   const deleteResult = await cdp.evaluate<string>(`
     (async () => {
       const card = document.querySelector(${JSON.stringify(selector)});
@@ -296,15 +390,15 @@ async function main(): Promise<void> {
     `期望保留 ${beforeIds.join(', ')}，实际 ${finalIds.join(', ')}`,
   );
 
-  console.log('7. 核对服务端数据已同步删除');
+  console.log('9. 核对服务端数据已同步删除');
   const serverTotal = await fetch(`${appUrl}/api/cards`)
     .then((response) => response.json() as Promise<{ total: number }>)
     .then((body) => body.total)
     .catch(() => -1);
   check('服务端条数与界面一致', serverTotal === finalCount, `服务端 ${serverTotal}，界面 ${finalCount}`);
 
-  // 放在最后：这一步会短暂断网，不能影响前面依赖网络的检查
-  console.log('8. PWA：manifest、service worker 与缓存边界');
+  // 放在最后：这几条只读静态资源与浏览器状态，不碰卡片数据
+  console.log('10. PWA：manifest、service worker 与缓存边界');
   const manifestResult = await cdp.evaluate<string>(`
     (async () => {
       const link = document.querySelector('link[rel="manifest"]');
