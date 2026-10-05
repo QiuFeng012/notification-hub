@@ -1,4 +1,4 @@
-﻿<#
+<#
   信息整合台 —— 服务启动脚本
 
   做三件事：
@@ -116,27 +116,37 @@ if (-not (Test-Path $entry)) {
 }
 
 # 4. 后台拉起服务端。用独立进程，窗口关闭后依然存活。
+#
+# 为什么不用 Start-Process + -RedirectStandardOutput：从"没有控制台"的父进程里
+# （双击桌面快捷方式时正是这种）那套重定向会阻塞，服务起不来。
+# 这里直接创建进程，并把日志重定向交给 cmd —— 我们不需要读子进程的输出管道，
+# 所以三个流一个都不设 Redirect*，不留下任何需要我们去读的管道。
 Write-Step "正在启动服务…"
-$process = Start-Process -FilePath 'node' `
-  -ArgumentList '--env-file-if-exists=../../.env', 'dist/index.js' `
-  -WorkingDirectory $serverDir `
-  -WindowStyle Hidden -PassThru `
-  -RedirectStandardOutput $logFile `
-  -RedirectStandardError $errFile
+$cmdLine = 'node --env-file-if-exists=../../.env dist\index.js >> "' + $logFile + '" 2>> "' + $errFile + '"'
+$process = New-Object System.Diagnostics.Process
+$process.StartInfo.FileName = 'cmd.exe'
+$process.StartInfo.Arguments = '/c ' + $cmdLine
+$process.StartInfo.WorkingDirectory = $serverDir
+$process.StartInfo.UseShellExecute = $false
+$process.StartInfo.CreateNoWindow = $true
+
+$ready = $false
+try {
+  [void]$process.Start()
+} catch {
+  Write-Err2 "无法启动服务进程：$($_.Exception.Message)"
+  Write-Step "完整日志：$logFile"
+  exit 1
+}
 
 # 5. 轮询等待就绪，最多 30 秒
-$ready = $false
 for ($i = 0; $i -lt 60; $i++) {
   Start-Sleep -Milliseconds 500
-  if ($process.HasExited) { break }
   if (Test-ServiceReady) { $ready = $true; break }
 }
 
 if (-not $ready) {
   Write-Err2 "服务启动失败"
-  if ($process.HasExited) {
-    Write-Step "进程已退出，退出码 $($process.ExitCode)"
-  }
   if (Test-Path $errFile) {
     $errors = Get-Content $errFile -ErrorAction SilentlyContinue |
       Where-Object { $_ -and $_ -notmatch 'env-file-if-exists' }
@@ -145,6 +155,13 @@ if (-not $ready) {
       Write-Host "  错误输出：" -ForegroundColor Red
       $errors | Select-Object -Last 15 | ForEach-Object { Write-Host "    $_" }
     }
+  }
+  # 端口被占用是最常见的一种，单独点出来：错误原文是 EADDRINUSE，
+  # 用户看到它并不会想到"是不是已经开着一个了"。
+  if ((Test-Path $errFile) -and (Get-Content $errFile -Raw -ErrorAction SilentlyContinue) -match 'EADDRINUSE') {
+    Write-Host ""
+    Write-Warn2 "端口 $Port 已被占用：可能已经有一个服务在跑，或者被别的程序占了。"
+    Write-Step "先双击「查看状态.bat」确认，或双击「停止信息整合台.bat」停掉旧的再试。"
   }
   Write-Host ""
   Write-Step "完整日志：$logFile"

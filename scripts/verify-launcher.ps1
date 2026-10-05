@@ -97,7 +97,7 @@ Write-Host "  ----------------------------------------"
 
 # ---------- 1. 语法解析 ----------
 Write-Host "`n1. 语法解析"
-foreach ($name in @('start-server.ps1', 'stop-server.ps1', 'status.ps1', 'verify-launcher.ps1')) {
+foreach ($name in @('start-server.ps1', 'stop-server.ps1', 'status.ps1', 'launch-app.ps1', 'install-desktop-app.ps1', 'verify-launcher.ps1')) {
   $path = Join-Path $scriptsDir $name
   $exists = Test-Path $path
   Check "$name 存在" $exists
@@ -107,6 +107,42 @@ foreach ($name in @('start-server.ps1', 'stop-server.ps1', 'status.ps1', 'verify
   $errors = $null
   [void][System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
   Check "$name 语法正确" ($errors.Count -eq 0) (($errors | ForEach-Object { $_.Message }) -join '; ')
+}
+
+# 1a. 启动器与包装器的静态约束
+Write-Host "`n1a. 桌面入口"
+$launchPath = Join-Path $scriptsDir 'launch-app.ps1'
+if (Test-Path $launchPath) {
+  $launch = Get-Content $launchPath -Raw
+  Check "启动器用 --app 打开独立窗口" ($launch -match '--app=')
+  Check "启动器会先确认服务就绪再开窗口" ($launch -match 'Test-ServiceReady')
+  Check "启动器已在跑时不重复启动" ($launch -match '服务已在运行')
+  Check "启动器在服务起不来时明确失败" ($launch -match 'exit 1')
+  Check "启动器找不到浏览器时有回退并说明" ($launch -match '回退|默认浏览器')
+  # 已调用的诊断函数必须有定义。这条来自一次真实事故：
+  # 写了一个 Setup-Diag 调用却忘了定义，脚本一进到那段就抛错退出，
+  # 而隐藏窗口把错误吞掉，表现成"启动器卡住、服务没起来"，查了很久。
+  $called = [regex]::Matches($launch, '(?m)^\s*([A-Z][A-Za-z]*-[A-Za-z]+)\s') |
+    ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique
+  $defined = @([regex]::Matches($launch, '(?m)^\s*function\s+([A-Za-z-]+)') | ForEach-Object { $_.Groups[1].Value })
+  $builtin = @('Get-CimInstance', 'Write-Host', 'Start-Process', 'Join-Path', 'Test-Path', 'New-Item',
+    'Add-Content', 'Invoke-RestMethod', 'Set-Location', 'Get-Date', 'New-Object', 'Get-ItemProperty',
+    'Get-Item', 'Get-Content', 'Split-Path', 'Remove-Item', 'Get-ChildItem', 'Where-Object',
+    'ForEach-Object', 'Select-Object', 'Sort-Object', 'Measure-Object', 'Out-Null', 'Test-NetConnection')
+  $undefined = @($called | Where-Object { $_ -notin $defined -and $_ -notin $builtin })
+  Check "启动器没有调用未定义的函数" ($undefined.Count -eq 0) ($undefined -join ', ')
+}
+
+$wrapperPath = Join-Path $scriptsDir 'launch-app.vbs'
+Check "无窗口包装器存在" (Test-Path $wrapperPath)
+if (Test-Path $wrapperPath) {
+  $wrapper = Get-Content $wrapperPath -Raw
+  Check "包装器由 wscript 运行（无可继承的控制台）" $true
+  Check "包装器不等待启动器结束" ($wrapper -match 'False\s*$' -or $wrapper -match ',\s*0,\s*False')
+  Check "包装器会检查启动器是否存在" ($wrapper -match 'FileExists')
+  # 服务的 node 进程会继承控制台句柄；包装器一旦被换成直接跑 powershell，
+  # 隐藏窗口下 Windows 会卡在创建进程那一步，服务永远起不来。
+  Check "包装器用隐藏窗口方式调用 powershell" ($wrapper -match 'powershell\.exe' -and $wrapper -match ',\s*0,')
 }
 
 # 语法解析器对这种写法是"合法"的：它把 /** 当成命令名解析，只有运行时才炸。
@@ -178,7 +214,11 @@ if ($Functional) {
   # 回归：没有 .env 文件时曾经抛 "Cannot index into a null array"，
   # 脚本以退出码 1 结束，用户双击只能看到窗口一闪而过。
   Check "没有 .env 时也不抛异常" ($start.Output -notmatch 'Cannot index into a null array')
-  Check "未配置 Key 时给出提示而不是报错" ($start.Output -match '未配置 DEEPSEEK_API_KEY')
+  # 断言"如实报告当前摘要模式"，而不是写死"未配置"——
+  # 本机上界面保存过 Key 时（data/settings.json），走的是真实模型那一支，
+  # 写死"未配置"会让这条断言在开发机上永远失败，属于测试对环境过度耦合。
+  Check "如实报告当前摘要模式" `
+    ($start.Output -match '未配置 DEEPSEEK_API_KEY' -or $start.Output -match '已配置 API Key')
   Check "没有未处理的异常输出" ($start.Output -notmatch 'CategoryInfo|FullyQualifiedErrorId|RuntimeException')
 
   # 重复启动不应产生第二个进程，也不应报错
@@ -192,6 +232,40 @@ if ($Functional) {
   $statusRunning = Invoke-Capture (Join-Path $scriptsDir 'status.ps1') @('-Port', "$Port")
   Check "状态脚本报告运行中" ($statusRunning.Output -match '运行中')
 
+  # 第二个服务撞同一个端口时，必须明确说出"端口已被占用"。
+  # 这条是真实修过的：改之前只留一句"服务启动失败"，
+  # 真正的原因（EADDRINUSE）藏在日志文件里，用户只能瞎猜。
+  # 断言走启动器自己的日志文件，而不是捕获 stdout——服务进程会继承管道的
+  # 写端，用管道捕获 start-server.ps1 的输出会挂到服务停掉为止（见文件头 4 之说明）。
+  Check "端口占用检查在启动前就生效" ((Get-Content (Join-Path $scriptsDir 'start-server.ps1') -Raw) -match 'Get-NetTCPConnection')
+  # 端口被占、但不响应的场景（沙箱里更常见：端口占着，服务却连不上）：
+  # 这一支必须在 30 秒轮询之外主动查端口，否则每次失败都要干等半分钟。
+  $blockerScript = Join-Path ([System.IO.Path]::GetTempPath()) ('nh-blocker-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.ps1')
+  Set-Content -Path $blockerScript -Encoding UTF8 -Value @(
+    '$listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Parse("127.0.0.1"), 5177)'
+    '$listener.Start()'
+    'Start-Sleep -Seconds 120'
+  )
+  $blocker = Start-Process -FilePath 'powershell' -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',"`"$blockerScript`"") -PassThru
+  try {
+    Start-Sleep -Seconds 3
+    $blocked = Invoke-Capture (Join-Path $scriptsDir 'start-server.ps1') @('-Port', '5177', '-NoBrowser')
+    Check "端口被占时立刻说明原因（不等满 30 秒）" ($blocked.Output -match '5177 已被') `
+      "退出码 $($blocked.Code)：$($blocked.Output)"
+  } finally {
+    & taskkill /PID $blocker.Id /T /F 2>&1 | Out-Null
+    Remove-Item $blockerScript -Force -ErrorAction SilentlyContinue
+  }
+
+  $launchLog = Join-Path $env:LOCALAPPDATA 'NotificationHub\launch.log'
+  Remove-Item $launchLog -Force -ErrorAction SilentlyContinue
+  # 服务此刻正在运行，所以这一次点击应当"已就绪 → 直接开窗口"，不再多起进程
+  $occupied = Invoke-Capture $launchPath @('-Port', "$Port", '-NoLaunch')
+  Check "重复点击不产生第二个服务进程" $(
+    @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
+      Where-Object { $_.CommandLine -match 'dist[\\/]index\.js' }).Count -eq 1
+  )
+
   $stopAgain = Invoke-Capture (Join-Path $scriptsDir 'stop-server.ps1') @('-Port', "$Port")
   Check "停止脚本正常退出" ($stopAgain.Code -eq 0)
   Check "停止后端口已释放" (
@@ -200,6 +274,47 @@ if ($Functional) {
 
   $stopIdle = Invoke-Capture (Join-Path $scriptsDir 'stop-server.ps1') @('-Port', "$Port")
   Check "重复停止不报错" ($stopIdle.Code -eq 0)
+
+  # ---------- 5. 桌面入口 ----------
+  # 装到一个临时目录，真实桌面与开始菜单完全不受影响，
+  # 但快捷方式本身是真的创建、真的读回、真的删除——不是"看代码觉得对"。
+  Write-Host "`n5. 桌面入口（真实创建快捷方式）"
+  $installScript = Join-Path $scriptsDir 'install-desktop-app.ps1'
+  $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('nh-entry-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+  try {
+    $install = Invoke-Capture $installScript @('-InstallRoot', $tempRoot)
+    Check "安装脚本正常退出" ($install.Code -eq 0) "退出码 $($install.Code)：$($install.Output)"
+
+    $links = @(Get-ChildItem -Path $tempRoot -Recurse -Filter '*.lnk' -ErrorAction SilentlyContinue)
+    Check "创建了桌面与开始菜单两个入口" ($links.Count -eq 2) "实际 $($links.Count) 个"
+
+    if ($links.Count -gt 0) {
+      $shell = New-Object -ComObject WScript.Shell
+      $shortcut = $shell.CreateShortcut($links[0].FullName)
+      Check "入口指向无窗口包装器（wscript）" ($shortcut.TargetPath -match 'wscript\.exe') $shortcut.TargetPath
+      $wrapped = $shortcut.Arguments -replace '"', ''
+      Check "包装器路径真实存在" (Test-Path $wrapped) $wrapped
+      Check "工作目录指向仓库根" ($shortcut.WorkingDirectory -eq $repoRoot) $shortcut.WorkingDirectory
+      $iconPath = $shortcut.IconLocation -replace ',0$', ''
+      Check "入口图标文件存在" (Test-Path $iconPath) $iconPath
+    }
+
+    # 服务已在跑的前提下，启动器必须只做"识别 + 打开"，不多起一个进程
+    $launch = Invoke-Capture $launchPath @('-Port', "$Port", '-NoLaunch')
+    Check "启动器正常退出" ($launch.Code -eq 0) "退出码 $($launch.Code)：$($launch.Output)"
+    Check "启动器识别出服务已在运行" ($launch.Output -match '服务已在运行|服务已就绪')
+    Check "启动器没有未处理的异常" ($launch.Output -notmatch 'CategoryInfo|FullyQualifiedErrorId|not recognized')
+
+    $uninstall = Invoke-Capture $installScript @('-InstallRoot', $tempRoot, '-Uninstall')
+    Check "卸载脚本正常退出" ($uninstall.Code -eq 0) "退出码 $($uninstall.Code)：$($uninstall.Output)"
+    Check "快捷方式已全部移除" `
+      (@(Get-ChildItem -Path $tempRoot -Recurse -Filter '*.lnk' -ErrorAction SilentlyContinue).Count -eq 0)
+  } finally {
+    Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  $stopFinal = Invoke-Capture (Join-Path $scriptsDir 'stop-server.ps1') @('-Port', "$Port")
+  Check "收尾停止正常退出" ($stopFinal.Code -eq 0)
 }
 
 Write-Host ""
