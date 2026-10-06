@@ -216,7 +216,11 @@ async function main(): Promise<void> {
         .map((item) => item.textContent);
       const planned = document.querySelectorAll('[data-testid="planned-badge"]').length;
       const hasKeyInput = Boolean(document.querySelector('#api-key-input'));
-      return JSON.stringify({ hash, api, planned, hasKeyInput });
+      const themeOptions = [...document.querySelectorAll('[data-theme-option]')]
+        .map((el) => el.getAttribute('data-theme-option'));
+      const theme = document.documentElement.getAttribute('data-theme');
+      const bodyBg = getComputedStyle(document.body).backgroundColor;
+      return JSON.stringify({ hash, api, planned, hasKeyInput, themeOptions, theme, bodyBg });
     })()
   `);
   const settings = JSON.parse(settingsState) as {
@@ -224,16 +228,79 @@ async function main(): Promise<void> {
     api: string[];
     planned: number;
     hasKeyInput: boolean;
+    themeOptions: string[];
+    theme: string | null;
+    bodyBg: string;
   };
   check('切到设置页，地址栏同步', settings.hash === '#/settings', settings.hash);
   check('API 调用已经放进设置页', settings.hasKeyInput && settings.api.includes('API 调用'), settingsState);
-  check('预留了「外观风格」与「开机自启」', settings.planned === 2, `占位分组 ${settings.planned} 个`);
+  // 「外观风格」已经实现，于是只剩「开机自启」还是占位
+  check('只剩「开机自启」还是占位', settings.planned === 1, `占位分组 ${settings.planned} 个`);
   check(
     '占位项明确标注了还没实现',
     await cdp.evaluate<boolean>(
       `document.body.textContent.includes('待实现') && document.body.textContent.includes('没做的原因')`,
     ),
   );
+
+  // ---------- 外观风格：真的点一次，并核对配色真的换了 ----------
+  check(
+    '外观风格有三种可选主题',
+    settings.themeOptions.join(',') === 'light,dark,system',
+    settings.themeOptions.join(','),
+  );
+  check('页面带上了主题标记', settings.theme === 'light' || settings.theme === 'dark', String(settings.theme));
+
+  const clickTheme = (name: string) =>
+    cdp.evaluate<boolean>(`
+      (() => {
+        const option = [...document.querySelectorAll('[data-theme-option]')]
+          .find((el) => el.getAttribute('data-theme-option') === ${JSON.stringify(name)});
+        if (!option) return false;
+        option.click();
+        return true;
+      })()
+    `);
+  const themeState = () =>
+    cdp.evaluate<string>(`
+      JSON.stringify({
+        theme: document.documentElement.getAttribute('data-theme'),
+        mode: document.documentElement.getAttribute('data-theme-mode'),
+        bg: getComputedStyle(document.body).backgroundColor,
+        checked: [...document.querySelectorAll('[data-theme-option][aria-checked="true"]')]
+          .map((el) => el.getAttribute('data-theme-option')),
+      })
+    `);
+
+  const darkShot = await (async () => {
+    check('点得动「深色」', await clickTheme('dark'));
+    await sleep(400);
+    return JSON.parse(await themeState()) as { theme: string; mode: string; bg: string; checked: string[] };
+  })();
+  check('选深色后 data-theme 变成 dark', darkShot.theme === 'dark', JSON.stringify(darkShot));
+  check('深色的背景色与米白不同', darkShot.bg !== settings.bodyBg, `${settings.bodyBg} -> ${darkShot.bg}`);
+  check('深色按钮标为已选', darkShot.checked.join(',') === 'dark', darkShot.checked.join(','));
+
+  check('点得动「米白」', await clickTheme('light'));
+  await sleep(400);
+  const lightShot = JSON.parse(await themeState()) as { theme: string; bg: string; checked: string[] };
+  check('选米白后 data-theme 回到 light', lightShot.theme === 'light', JSON.stringify(lightShot));
+  check('颜色真的切回去了（不是只改了按钮样式）', lightShot.bg === settings.bodyBg, `${darkShot.bg} -> ${lightShot.bg}`);
+
+  check('点得动「跟随系统」', await clickTheme('system'));
+  await sleep(400);
+  const systemShot = JSON.parse(await themeState()) as { theme: string; mode: string; checked: string[] };
+  // 系统是浅是深取决于这台机器，但 mode 必须是 system，且 theme 必须是解析后的两个值之一
+  check('「跟随系统」记的是偏好而不是写死一个主题', systemShot.mode === 'system', JSON.stringify(systemShot));
+  check(
+    '「跟随系统」解析成具体主题',
+    systemShot.theme === 'light' || systemShot.theme === 'dark',
+    String(systemShot.theme),
+  );
+
+  // 收尾：切回米白，别把深色留给下一个看界面的人
+  await clickTheme('light');
+  await sleep(300);
 
   check('点标题回首页', await cdp.evaluate<boolean>(`
     (() => {
