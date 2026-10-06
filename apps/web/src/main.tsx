@@ -1,12 +1,18 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import { applyTheme } from './lib/theme';
 import './styles.css';
 
 const container = document.getElementById('root');
 if (!container) {
   throw new Error('找不到 #root 挂载点');
 }
+
+// 主题在渲染前先应用一次。index.html 里那段内联脚本已经做过同样的事
+// （为了不闪白），这里是兜底：内联脚本被内容安全策略挡住时，
+// 主题至少还是能在应用启动时生效，而不是整页停在浅色。
+applyTheme();
 
 createRoot(container).render(
   <StrictMode>

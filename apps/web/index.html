@@ -14,7 +14,38 @@
     -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+    <!-- content 由 src/lib/theme.ts 按当前主题改写；这里的初值是米白主题的底色 -->
     <meta name="theme-color" content="#faf8f3" />
+
+    <!--
+      在样式表加载之前定下主题。
+      这一段必须是内联的、且必须待在这里：主题存在 localStorage 里，只有同步执行
+      才能赶在第一帧之前把 data-theme 写到 <html> 上。等打包产物（或 React 挂载）
+      再去读，用户会先看到一帧浅色再跳成深色——也就是"闪白"，夜里特别刺眼。
+
+      代价是存储键与取值判断在这里重复了一份（见 src/lib/theme.ts 的
+      THEME_STORAGE_KEY）。改那边就要同步改这里，两处不一致的表现就是打开时闪一下。
+    -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem('notification-hub.theme');
+          var mode = stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system';
+          var resolved =
+            mode === 'system'
+              ? window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light'
+              : mode;
+          document.documentElement.setAttribute('data-theme', resolved);
+          document.documentElement.setAttribute('data-theme-mode', mode);
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta && resolved === 'dark') meta.setAttribute('content', '#1a1916');
+        } catch (e) {
+          /* 读不到偏好就按默认的米白渲染，不值得让页面报错 */
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

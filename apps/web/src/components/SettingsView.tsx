@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import type { SettingsView as SettingsViewData, UpdateSettingsRequest } from '@notification-hub/shared';
 import { ApiSettings } from './ApiSettings';
+import { ThemeSettings } from './ThemeSettings';
 
 interface SettingsViewProps {
   settings: SettingsViewData | null;
@@ -16,6 +17,8 @@ interface SettingsViewProps {
  * 刻意做成"看得见但点不动"，而不是干脆不画：先把位置和形状占住，
  * 每次进设置都能看到还差什么。但必须**明确写着没做**——
  * 一个能点、点了没反应的开关比没有这个开关更糟。
+ *
+ * 「外观风格」原本也走这里，现在已经真的实现了，于是换成 ThemeSettings。
  */
 function PlannedSetting({
   title,
@@ -45,7 +48,7 @@ function PlannedSetting({
   );
 }
 
-/** 设置页：API 调用 + 两个已经占位、还没实现的分组 */
+/** 设置页：API 调用 + 已实现的外观风格 + 仍然占位的开机自启 */
 export function SettingsView({ settings, loading, saving, onSave, onClear }: SettingsViewProps) {
   return (
     <div className="settings-page">
@@ -63,18 +66,7 @@ export function SettingsView({ settings, loading, saving, onSave, onClear }: Set
         />
       </section>
 
-      <PlannedSetting
-        title="外观风格"
-        desc="切换界面配色与字体。目前只有「米白」这一套。"
-        control={
-          <div className="planned-options">
-            <span className="planned-option planned-option--current">米白（当前）</span>
-            <span className="planned-option">深色</span>
-            <span className="planned-option">跟随系统</span>
-          </div>
-        }
-        reason="没做的原因：配色统一由 styles.css 顶部的 CSS 变量决定，切换主题要先把这些变量收敛成可切换的方案，否则会改成一半、半页不对。"
-      />
+      <ThemeSettings />
 
       <PlannedSetting
         title="开机自启"

@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_HIGHLIGHT_STYLE } from '@notification-hub/shared';
@@ -470,14 +470,42 @@ describe('设置页', () => {
     expect(screen.getByLabelText('DeepSeek API Key')).toHaveValue('');
   });
 
-  it('预留了「外观风格」与「开机自启」，并明确标注还没有实现', async () => {
-    renderSettingsApp();
+  it('「外观风格」已经能用了，「开机自启」仍然明确标注没做', async () => {
+    try {
+      // 「跟随系统」这条要真的读系统偏好，而 jsdom 不实现 matchMedia。
+      // 这里只在本用例内伪装，用完就还原，避免影响其他用例。
+      vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn() })));
+      cleanup();
+      renderSettingsApp();
 
-    expect(await screen.findByRole('heading', { name: '外观风格' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: '开机自启' })).toBeInTheDocument();
-    // 占位项必须自己说清楚没做，不能看起来像能用的开关
-    expect(screen.getAllByTestId('planned-badge')).toHaveLength(2);
-    expect(screen.getByText(/米白（当前）/)).toBeInTheDocument();
+      expect(await screen.findByRole('heading', { name: '外观风格' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: '开机自启' })).toBeInTheDocument();
+      // 还差什么要一眼看得见：只剩「开机自启」这一项了
+      expect(screen.getAllByTestId('planned-badge')).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('切换主题会立刻写入 html 与本地存储', async () => {
+    try {
+      vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false, addEventListener: vi.fn() })));
+      cleanup();
+      renderSettingsApp();
+
+      // 默认跟随系统，而上面伪装的是"系统为浅色"
+      await screen.findByRole('heading', { name: '外观风格' });
+      expect(document.documentElement.getAttribute('data-theme')).toBe('light');
+
+      await userEvent.click(screen.getByRole('radio', { name: '深色' }));
+
+      expect(document.documentElement.getAttribute('data-theme')).toBe('dark');
+      expect(document.documentElement.getAttribute('data-theme-mode')).toBe('dark');
+      expect(window.localStorage.getItem('notification-hub.theme')).toBe('dark');
+      expect(screen.getByRole('radio', { name: '深色' })).toHaveAttribute('aria-checked', 'true');
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('填写 Key 后保存，提交的是用户输入的值', async () => {
