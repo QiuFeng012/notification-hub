@@ -204,6 +204,9 @@ export function CalendarView({
           gridColumn: `${span.startColumn + 1} / ${span.endColumn + 2}`,
           gridRow: span.lane + 2,
           ['--span-color' as string]: color,
+          // 墨色也走 CSS 变量：同一个亮度判断在深色主题下要换成另一组墨色
+          // （浅色主题下"浅色块用深字"，深色主题下那个深字会糊在暗背景上）
+          ['--span-ink' as string]: readableTextColor(color, 'var(--span-ink-dark)', 'var(--span-ink-light)'),
         }}
         title={`${span.card.title}（${span.card.schedule?.label ?? ''}）`}
         onClick={() =>
@@ -216,9 +219,7 @@ export function CalendarView({
         {/* 起始圆：区间从更早的周延续过来时不画，改为平头，示意还没结束 */}
         <span className={showStart ? 'span__cap span__cap--start' : 'span__edge span__edge--start'} />
         <span className="span__bar">
-          <span className="span__label" style={{ color: readableTextColor(color) }}>
-            {span.card.title}
-          </span>
+          <span className="span__label">{span.card.title}</span>
         </span>
         <span className={showEnd ? 'span__cap span__cap--end' : 'span__edge span__edge--end'} />
       </button>

@@ -1,4 +1,17 @@
+/*
+ * 主题颜色。
+ *
+ * 全部颜色必须经由这里的变量，任何一处写死色值都会让"切换主题"变成"改一半"：
+ * 深色下那一处仍是浅色，看起来像渲染坏了。所以下面按用途拆成几组
+ * （背景 / 边框 / 文字 / 强调 / 警示 / 标记），而不是按"哪个页面用到"。
+ *
+ * 切换机制：<html> 上的 data-theme 由 src/lib/theme.ts 设置，只有 'light' 与 'dark'
+ * 两个取值——"跟随系统"在应用侧就被解析成其中之一，CSS 里不需要 media query。
+ * color-scheme 一并对齐，让滚动条与原生控件（输入框、日期选择器）也跟着变。
+ */
 :root {
+  color-scheme: light;
+
   /* 米白基调：暖白背景 + 纯白纸面 + 暖褐文字 */
   --bg: #faf8f3;
   --bg-elevated: #fffefb;
@@ -11,16 +24,33 @@
   --text: #33302a;
   --text-muted: #6f6a5f;
   --text-dim: #9c968a;
+  /* 要点正文比 --text 略浅，但不能浅到失去正文应有的对比度 */
+  --text-body: #4a463d;
+  /* 落在强调色实心块上的文字 */
+  --on-accent: #fffdf9;
+  /* 落在荧光笔色块上的墨色：亮色块用深墨、暗色块用浅墨，
+     具体取哪个由 readableTextColor 按色块亮度算，这里只提供两种墨色 */
+  --span-ink-dark: #3a352c;
+  --span-ink-light: #fffdf9;
 
   /* 强调色：低饱和赭橙，是整页唯一的彩色 */
   --accent: #b4643f;
   --accent-hover: #9d5535;
   --accent-soft: rgba(180, 100, 63, 0.08);
+  /* 强调色的描边与填充：同一个色的不同强度，集中在这里免得散落各处 */
+  --accent-line: rgba(180, 100, 63, 0.28);
+  --accent-line-strong: rgba(180, 100, 63, 0.32);
+  --accent-fill: rgba(180, 100, 63, 0.16);
 
   --danger: #b3453d;
   --danger-soft: rgba(179, 69, 61, 0.07);
+  --danger-line: rgba(179, 69, 61, 0.24);
   --warn: #97723a;
   --warn-soft: rgba(151, 114, 58, 0.08);
+  --warn-line: rgba(151, 114, 58, 0.28);
+
+  /* 圆形色块的内描边：纯色块压在纸面上时需要一圈轮廓才不糊 */
+  --swatch-ring: rgba(51, 48, 42, 0.12);
 
   --radius: 10px;
   --radius-sm: 7px;
@@ -31,6 +61,54 @@
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB",
     "Microsoft YaHei", "Source Han Sans SC", sans-serif;
   --mono: "SFMono-Regular", "JetBrains Mono", Consolas, "Liberation Mono", monospace;
+}
+
+/*
+ * 深色主题：暖黑基调。
+ *
+ * 没有做成"把浅色反过来"：深色下背景如果比纸面只亮一点点，卡片会浮不起来，
+ * 所以层次仍靠"纸面比背景亮"来表达，只是方向换成暖灰往上抬。
+ * 强调色相应提亮（#b4643f 在深底上会暗得读不出来），但保持同一个赭橙色相，
+ * 让人一眼认出还是同一套配色。
+ */
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #1a1916;
+  --bg-elevated: #24231f;
+  --bg-sunken: #12110f;
+  --bg-code: #201f1b;
+
+  --border: #38352e;
+  --border-strong: #4d4941;
+
+  --text: #ece7de;
+  --text-muted: #aaa396;
+  --text-dim: #837c70;
+  --text-body: #d8d2c7;
+  --on-accent: #1a1916;
+  --span-ink-dark: #171613;
+  --span-ink-light: #ece7de;
+
+  --accent: #d98a63;
+  --accent-hover: #e59c77;
+  --accent-soft: rgba(217, 138, 99, 0.14);
+  --accent-line: rgba(217, 138, 99, 0.38);
+  --accent-line-strong: rgba(217, 138, 99, 0.46);
+  --accent-fill: rgba(217, 138, 99, 0.2);
+
+  --danger: #e08b82;
+  --danger-soft: rgba(224, 139, 130, 0.13);
+  --danger-line: rgba(224, 139, 130, 0.34);
+  --warn: #cfa768;
+  --warn-soft: rgba(207, 167, 104, 0.13);
+  --warn-line: rgba(207, 167, 104, 0.36);
+
+  --swatch-ring: rgba(0, 0, 0, 0.45);
+
+  /* 深色下阴影要更重才看得出层次；浅色的淡阴影在这里等于没有 */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-raised: 0 1px 3px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.32);
 }
 
 * {
@@ -158,7 +236,7 @@ body {
 }
 
 .nav-button--active {
-  border-color: rgba(180, 100, 63, 0.35);
+  border-color: var(--accent-line-strong);
   background: var(--accent-soft);
   color: var(--accent);
 }
@@ -192,7 +270,7 @@ body {
   gap: 10px 14px;
   margin: 18px 0 0;
   padding: 12px 16px;
-  border: 1px solid rgba(180, 100, 63, 0.22);
+  border: 1px solid var(--accent-line);
   border-radius: var(--radius);
   background: var(--accent-soft);
 }
@@ -284,25 +362,104 @@ body {
   font-size: 11.5px;
 }
 
-.planned-options {
+/* ---------- 外观风格（主题切换） ---------- */
+
+.theme-options {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
 }
 
-.planned-option {
-  padding: 5px 14px;
+.theme-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg-sunken);
-  color: var(--text-dim);
-  font-size: 12.5px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
 }
 
-.planned-option--current {
-  border-style: solid;
+.theme-option:hover {
   border-color: var(--border-strong);
-  color: var(--text-muted);
+  color: var(--text);
+}
+
+.theme-option--active {
+  border-color: var(--accent-line-strong);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.theme-option__label {
+  font-weight: 500;
+}
+
+/*
+ * 每个选项里的小样：一张缩小的"纸面 + 两条要点"。
+ *
+ * 画它而不是写死几个色块，是因为色值本身要跟着主题走——
+ * 小样用的是**它代表的那个主题**的色值，所以以后调整配色时
+ * 小样会自动跟着变，不会出现"预览和实际不一致"。
+ */
+.theme-option__preview {
+  --paper: #fffefb;
+  --ink: #d8d1c0;
+  --edge: #e8e2d6;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  width: 30px;
+  height: 24px;
+  padding: 0 5px;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  background: var(--paper);
+  flex: 0 0 auto;
+}
+
+.theme-option__bar {
+  height: 3px;
+  border-radius: 2px;
+  background: var(--ink);
+}
+
+.theme-option__bar--short {
+  width: 60%;
+}
+
+/* 深色小样自带一套色值：它展示的是"深色主题长什么样"，
+   而按钮本身在浅色页面里，不能借用外层变量 */
+.theme-option__preview[data-theme-preview='dark'] {
+  --paper: #24231f;
+  --ink: #5a554c;
+  --edge: #38352e;
+}
+
+.theme-option__preview[data-theme-preview='light'] {
+  --paper: #fffefb;
+  --ink: #d8d1c0;
+  --edge: #e8e2d6;
+}
+
+/* 已在深色主题下时，浅色小样要反过来自带浅色值；
+   深色小样则跟随外层变量（此刻外层就是深色主题） */
+:root[data-theme='dark'] .theme-option__preview[data-theme-preview='dark'] {
+  --paper: var(--bg-elevated);
+  --ink: var(--border-strong);
+  --edge: var(--border);
+}
+
+:root[data-theme='dark'] .theme-option__preview[data-theme-preview='light'] {
+  --paper: #fffefb;
+  --ink: #d8d1c0;
+  --edge: #e8e2d6;
 }
 
 .planned-switch {
@@ -533,7 +690,7 @@ body {
   border: 2px solid transparent;
   border-radius: 50%;
   cursor: pointer;
-  box-shadow: inset 0 0 0 1px rgba(51, 48, 42, 0.12);
+  box-shadow: inset 0 0 0 1px var(--swatch-ring);
 }
 
 .swatch--active {
@@ -770,7 +927,7 @@ body {
 
 .day-circle--today {
   background: var(--accent);
-  color: #fffdf9;
+  color: var(--on-accent);
   font-weight: 700;
 }
 
@@ -782,7 +939,7 @@ body {
 
 .day-circle--today.day-circle--selected {
   border-color: var(--text);
-  color: #fffdf9;
+  color: var(--on-accent);
 }
 
 /* ---------- 区间：圆—矩形—圆 ---------- */
@@ -844,7 +1001,9 @@ body {
 
 .span__label {
   padding: 0 6px;
-  color: #fffdf9;
+  /* --span-ink 由 CalendarView 按这个色块的亮度内联算出来（见 readableTextColor）。
+     兜底用 --text：万一没算出来，至少跟着主题走，而不是写死一个白色。 */
+  color: var(--span-ink, var(--text));
   font-size: 11.5px;
   font-weight: 500;
   line-height: 1;
@@ -855,7 +1014,7 @@ body {
 
 /* 单日圆里的文字与区间同色，避免白字落在浅色上的可读性问题 */
 .span--single .span__label {
-  color: #fffdf9;
+  color: var(--span-ink, var(--text));
 }
 
 /* ---------- 当天安排 ---------- */
@@ -1062,7 +1221,7 @@ body {
 
 .keyword-pill {
   padding: 2px 9px;
-  border: 1px solid rgba(180, 100, 63, 0.28);
+  border: 1px solid var(--accent-line);
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent);
@@ -1072,13 +1231,13 @@ body {
 .keyword-mark {
   padding: 0 2px;
   border-radius: 3px;
-  background: rgba(180, 100, 63, 0.16);
+  background: var(--accent-fill);
   color: var(--accent);
   font-weight: 600;
 }
 
 .chip--keyword {
-  border-color: rgba(180, 100, 63, 0.3);
+  border-color: var(--accent-line-strong);
   background: var(--accent-soft);
   color: var(--accent);
 }
@@ -1199,7 +1358,7 @@ body {
 
 /* 已修改标记 */
 .chip--edited {
-  border-color: rgba(151, 114, 58, 0.3);
+  border-color: var(--warn-line);
   background: var(--warn-soft);
   color: var(--warn);
 }
@@ -1244,7 +1403,7 @@ body {
 
 .revisions__reason {
   padding: 1px 8px;
-  border: 1px solid rgba(151, 114, 58, 0.3);
+  border: 1px solid var(--warn-line);
   border-radius: 999px;
   background: var(--warn-soft);
   color: var(--warn);
@@ -1318,7 +1477,7 @@ body {
 
 .button--primary {
   background: var(--accent);
-  color: #fffdf9;
+  color: var(--on-accent);
 }
 
 .button--primary:hover:not(:disabled) {
@@ -1506,19 +1665,19 @@ body {
 }
 
 .chip--ai {
-  border-color: rgba(180, 100, 63, 0.28);
+  border-color: var(--accent-line);
   background: var(--accent-soft);
   color: var(--accent);
 }
 
 .chip--mock {
-  border-color: rgba(151, 114, 58, 0.28);
+  border-color: var(--warn-line);
   background: var(--warn-soft);
   color: var(--warn);
 }
 
 .chip--pinned {
-  border-color: rgba(180, 100, 63, 0.32);
+  border-color: var(--accent-line-strong);
   background: var(--accent-soft);
   color: var(--accent);
   font-weight: 600;
@@ -1552,7 +1711,7 @@ body {
 }
 
 .card__points li {
-  color: #4a463d;
+  color: var(--text-body);
   font-size: 13.5px;
   line-height: 1.7;
 }
@@ -1584,7 +1743,7 @@ body {
 }
 
 .button--pin-on {
-  border-color: rgba(180, 100, 63, 0.32);
+  border-color: var(--accent-line-strong);
   background: var(--accent-soft);
   color: var(--accent);
 }
@@ -1659,7 +1818,7 @@ body {
 }
 
 .notice--mock {
-  border-color: rgba(151, 114, 58, 0.24);
+  border-color: var(--warn-line);
   background: var(--warn-soft);
 }
 
@@ -1695,7 +1854,7 @@ body {
 }
 
 .banner--error {
-  border: 1px solid rgba(179, 69, 61, 0.24);
+  border: 1px solid var(--danger-line);
   background: var(--danger-soft);
   color: var(--danger);
 }
