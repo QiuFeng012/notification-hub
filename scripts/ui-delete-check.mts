@@ -88,7 +88,8 @@ async function measureCalendarAlignment(cdp: {
         for (const day of row.querySelectorAll('.day-circle')) {
           const date = day.dataset.date;
           if (!date) continue;
-          const column = (new Date(date + 'T00:00:00').getDay() + 6) % 7;
+          // 列下标就是星期几：周日 = 0 … 周六 = 6（表头也按这个顺序）
+          const column = new Date(date + 'T00:00:00').getDay();
           const r = day.getBoundingClientRect();
           const cx = r.left + r.width / 2 - headerLeft;
           const list = byColumn.get(column) ?? [];
@@ -331,6 +332,78 @@ async function main(): Promise<void> {
 
   const aligned = await measureCalendarAlignment(cdp);
   check('本月各列与星期表头对齐', aligned.length === 0, aligned.join('；'));
+
+  // 一周从周日开始（周日在最左）。这条来自用户的实际要求：
+  // 1 号是周四时，4 号（周日）要和 1/2/3 号排在同一行，而不是和 5 号（周一）同行
+  // ——曾经按"周一到周日"切周，正好错成后者。
+  //
+  // 判据全部由界面自身的数据推导，不写死具体月份：写死过一版，
+  // 结果它在脚本翻到上个月之后执行，那个月的 1 号与 4 号本来就不在同一行，于是误报。
+  const weekLayout = await cdp.evaluate<string>(`
+    (() => {
+      const weekRows = [...document.querySelectorAll('.calendar__week')];
+      const title = document.querySelector('.calendar__title')?.textContent?.trim() ?? '';
+      if (!/(\\d{4})\\s*年\\s*(\\d{1,2})\\s*月/.test(title)) {
+        return '读不出当前月份：' + title;
+      }
+
+      const circles = weekRows.flatMap((row, rowIndex) =>
+        [...row.querySelectorAll('.day-circle')].map((el) => ({ el, row, rowIndex })),
+      );
+      // 诊断信息：整月的行分布，失败时直接看清楚是哪一行不对
+      const layout = weekRows.map((row, index) => {
+        const texts = [...row.querySelectorAll('.day-circle')].map((el) => el.dataset.date.slice(-2));
+        return index + ':[' + texts.join(',') + ']';
+      }).join(' ');
+      if (circles.length === 0) return '这个月没有任何日期圆';
+      if (Number(circles[0].el.textContent) !== 1) {
+        return '第一天不是 1 号，而是 ' + circles[0].el.textContent;
+      }
+
+      const labels = [...document.querySelectorAll('.calendar__weekday')];
+      if (labels.map((el) => el.textContent).join('') !== '日一二三四五六') {
+        return '表头顺序不是「日一二三四五六」：' + labels.map((el) => el.textContent).join('');
+      }
+
+      const problems = [];
+      let previous = 0;
+      for (const entry of circles) {
+        const day = Number(entry.el.textContent);
+        if (day !== previous + 1) problems.push('日期不连续：' + previous + ' 后面是 ' + day);
+        previous = day;
+        // 该日期必须落在它所属星期的那一列（列下标 = getDay()，周日 = 0）
+        const expected = new Date(entry.el.dataset.date + 'T00:00:00').getDay();
+        const box = entry.el.getBoundingClientRect();
+        let actual = 0;
+        let best = Infinity;
+        labels.forEach((label, index) => {
+          const r = label.getBoundingClientRect();
+          const delta = Math.abs(r.left + r.width / 2 - (box.left + box.width / 2));
+          if (delta < best) { best = delta; actual = index; }
+        });
+        if (actual !== expected) {
+          problems.push(day + ' 号在第 ' + actual + ' 列，应在第 ' + expected + ' 列');
+        }
+        if (problems.length > 3) break;
+      }
+
+      // 用户指出的那个具体场景：4 号是当月第一个周日时，它必须和 1/2/3 号同一行。
+      // 用日期串判断是 4 号，不用文本——"4" 会连 14、24 一起匹配上。
+      const first = circles[0];
+      const fourth = circles.find((entry) => entry.el.dataset.date.endsWith('-04'));
+      if (first && fourth && new Date(fourth.el.dataset.date + 'T00:00:00').getDay() === 0) {
+        if (fourth.row !== first.row) {
+          problems.push(
+            '标题「' + title + '」下 4 号没和 1 号同行；行分布 ' + layout +
+            '（1 号: rowIndex=' + first.rowIndex + ' date=' + first.el.dataset.date +
+            '；4 号: rowIndex=' + fourth.rowIndex + ' date=' + fourth.el.dataset.date + '）',
+          );
+        }
+      }
+      return problems.length > 0 ? problems.join('；') : 'ok';
+    })()
+  `);
+  check('周日在最左、日期落位正确且同周同行', weekLayout === 'ok', weekLayout);
 
   // 换一个月再量一次：不同月份首末周的空列数不同，
   // 只测一个月有可能恰好躲过那种只在特定月出现的错位
