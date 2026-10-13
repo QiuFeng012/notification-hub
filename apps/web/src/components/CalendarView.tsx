@@ -22,9 +22,8 @@ import {
   type ScheduleSpan,
 } from '../lib/calendar';
 
-// 周日在最左：中文日历的常见排法，也让"本月 1 号是周日"这类月份
-// 与人们的直觉一致（1 号和 2/n 号同行）
-const WEEKDAY_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
+// 周一在最左、周日在最右：这是用户确定的写法（一二三四五六日）
+const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
 
 /**
  * 常用的起始色，仅作为"快捷起点"。
@@ -59,8 +58,8 @@ function formatDateLabel(date: string): string {
   const parts = splitIsoDate(date);
   if (!parts) return date;
   const weekday = new Date(parts.year, parts.month - 1, parts.day).getDay();
-  // getDay() 就是 WEEKDAY_LABELS 的下标（0 = 周日）
-  const label = WEEKDAY_LABELS[weekday];
+  // 表头是「一…日」，所以要把 getDay() 的周日=0 换算成周一=0 再查表
+  const label = WEEKDAY_LABELS[weekday === 0 ? 6 : weekday - 1];
   return `${parts.month}月${parts.day}日 周${label}`;
 }
 

@@ -98,16 +98,30 @@ describe('splitIsoDate 与 shiftMonth', () => {
 });
 
 describe('buildMonthWeeks 周划分', () => {
-  it('一周以周日收尾（周日是一周最后一天）', () => {
-    // 2025-03-01 是周六、03-02 是周日，所以它们自成一"周"：
-    // 本月从周六开始，这一周只剩这两天
+  it('一周从周一开始、到周日结束', () => {
+    // 2025-03-01 是周六、03-02 是周日：这一段以周日收尾，所以这两天同段
     const result = weeks(2025, 3, []);
     expect(result[0]?.days.map((day) => day.date)).toEqual(['2025-03-01', '2025-03-02']);
-    // 下一段从 03-03（周一）到 03-09（周日），是完整的一段
+    // 下一段是完整的一周：03-03（周一）~ 03-09（周日）
     expect(result[1]?.days.map((day) => day.date)).toEqual([
       '2025-03-03', '2025-03-04', '2025-03-05', '2025-03-06',
       '2025-03-07', '2025-03-08', '2025-03-09',
     ]);
+  });
+
+  it('从左往右、从上往下读就是 1…月末', () => {
+    // 这是这套排法的核心目标：阅读顺序（行内按列号）必须与日期序号一致
+    for (const [year, month] of [[2025, 3], [2026, 10], [2026, 11], [2024, 2]] as const) {
+      const result = weeks(year, month, []);
+      const sequence = result.flatMap((week) =>
+        week.days
+          .map((day, index) => ({ day: day.day, column: week.dayColumns[index] ?? 0 }))
+          .sort((a, b) => a.column - b.column)
+          .map((item) => item.day),
+      );
+      const total = new Date(year, month, 0).getDate();
+      expect(sequence).toEqual(Array.from({ length: total }, (_, index) => index + 1));
+    }
   });
 
   it('只包含本月日期，不补上下月', () => {
@@ -146,13 +160,12 @@ describe('buildMonthWeeks 周划分', () => {
 
   it('日期列下标由星期几决定，首末周不会被挤到左边', () => {
     const result = weeks(2025, 3, []);
-    // 首段是 03-01（周六，下标 6）与 03-02（周日，下标 0）：
-    // 下标不递增，因为它是按星期几落位，而且这一段的末尾是周日
-    expect(result[0]?.dayColumns).toEqual([6, 0]);
-    // 下一段从 03-03（周一，下标 1）到 03-09（周日，下标 0）
-    expect(result[1]?.dayColumns).toEqual([1, 2, 3, 4, 5, 6, 0]);
-    // 末段只有 03-31（周一，下标 1）：3 月 30 日是周日、已收进上一段
-    expect(result[result.length - 1]?.dayColumns).toEqual([1]);
+    // 03-01 是周六 → 下标 5（周一 = 0）；03-02 是周日 → 下标 6
+    expect(result[0]?.dayColumns).toEqual([5, 6]);
+    // 下一段从 03-03（周一，下标 0）到 03-09（周日，下标 6）
+    expect(result[1]?.dayColumns).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    // 末段只有 03-31（周一，下标 0）
+    expect(result[result.length - 1]?.dayColumns).toEqual([0]);
   });
 });
 
@@ -161,9 +174,9 @@ describe('buildMonthWeeks 区间放置', () => {
     const result = weeks(2025, 3, [{ id: 'a', schedule: schedule('2025-03-05', '2025-03-07') }]);
     const week = result[1];
     const span = week?.spans[0];
-    // 列下标按星期几（周日 = 0）：03-05 是周三 → 下标 3；03-07 是周五 → 下标 5
-    expect(span?.startColumn).toBe(3);
-    expect(span?.endColumn).toBe(5);
+    // 列下标按星期几（周一 = 0）：03-05 是周三 → 下标 2；03-07 是周五 → 下标 4
+    expect(span?.startColumn).toBe(2);
+    expect(span?.endColumn).toBe(4);
     expect(span?.lane).toBe(0);
   });
 
@@ -269,8 +282,8 @@ describe('buildMonthWeeks 区间放置', () => {
     // 03-03（周一）到 03-05（周三），全部落在第二周（03-02~03-08）
     const result = weeks(2025, 3, [{ id: 'a', schedule: schedule('2025-02-25', '2025-03-05') }]);
 
-    // 首周只有 03-01（周六，下标 6）：从 2 月延续过来且右侧被截断。
-    // 起点落在列 0（不从周日算起，因为本月第一天是周六），
+    // 首周只有 03-01（周六，下标 5）：从 2 月延续过来且右侧被截断。
+    // 起点落在列 0（这一段从周一算起，虽然本月只有周六一天），
     // 终点落到列末，视觉上暗示"还没结束"。
     const clipped = result[0]?.spans[0];
     expect(clipped?.startsHere).toBe(false);
@@ -278,12 +291,12 @@ describe('buildMonthWeeks 区间放置', () => {
     expect(clipped?.startColumn).toBe(0);
     expect(clipped?.endColumn).toBe(6);
 
-    // 第二周里它结束于 03-05（周三，下标 3）：左侧平头、右侧有终点圆
+    // 第二周里它结束于 03-05（周三，下标 2）：左侧平头、右侧有终点圆
     const final = result[1]?.spans[0];
     expect(final?.startsHere).toBe(false);
     expect(final?.endsHere).toBe(true);
     expect(final?.startColumn).toBe(0);
-    expect(final?.endColumn).toBe(3);
+    expect(final?.endColumn).toBe(2);
   });
 
   it('区间的起始列与起始那天的日期圆落在同一列', () => {

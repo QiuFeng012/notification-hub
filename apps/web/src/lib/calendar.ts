@@ -27,14 +27,14 @@ export interface ScheduleSpan<T> {
   lane: number;
 }
 
-/** 日历的列数固定为 7（周日到周六），首末周前面的空列保持为空以对齐表头 */
+/** 日历的列数固定为 7（周一到周日），首末周前面的空列保持为空以对齐表头 */
 export const CALENDAR_COLUMNS = 7;
 
 /** 一周的排版结果。 */
 export interface CalendarWeek<T> {
   /** 本周需要展示的日期（只含本月）；首末周可能少于 7 个 */
   days: CalendarDay[];
-  /** 每个日期所在的列下标（0 = 周日 … 6 = 周六），与 days 一一对应 */
+  /** 每个日期所在的列下标（0 = 周一 … 6 = 周日），与 days 一一对应 */
   dayColumns: number[];
   /** 栅格列数，恒为 7，保证与星期表头对齐 */
   columnCount: number;
@@ -110,21 +110,21 @@ export function countUnscheduled<T extends { schedule: CardSchedule | null }>(ca
 /**
  * 把某个月的日期按周分组，并算出每一天落在星期几那一列。
  *
- * 关键点：**每一天的列下标由它的星期几决定**（周日 = 0 … 周六 = 6），
- * 而不是"这一周的第几个日期"。否则不满一周的首末周会被挤到左边，
- * 与星期表头错位，事件条也会跟着错位。
+ * 三条规则，缺一条就会错位或读不通，所以一起写在这里：
+ *
+ * 1. **列顺序是「一 二 三 四 五 六 日」**（周一最左、周日最右）。
+ *    因此列下标 = (getDay() + 6) % 7，而不是直接用 getDay()。
+ * 2. **每一天落在它所属星期的那一列**，而不是"这一周的第几个日期"。
+ *    否则不满一周的首末周会被挤到左边，与星期表头错位。
+ * 3. **切周在周日收尾**（周日是一周的最后一天）。
+ *    这条保证"从左往右、从上往下"读出来就是日期递增的顺序：
+ *    2026-10-01 是周四 → 第 1 行只剩 1、2、3（四五六），第 2 行是 4…10，
+ *    第 2 行读作 4、5、6…，正好接着第 1 行的 3。
+ *    若改成周一收尾（把周一当一段的开头），第 2 行会以 5 开头、4 落在行尾，
+ *    读起来就成了 1、2、3 然后 5、6、7、 最后 4——顺序断掉。
  *
  * 只保留本月的日期：首周可能前面空几列，末周可能后面空几列。
  * 刻意不补上个月/下个月的日期——用户要求"仅显示本月"。
- *
- * 一周的边界是"周一…周日"，也就是**在周日收尾**：周日是一周的最后一天。
- *
- * 注意列映射与切段是两件独立的事，这里踩过一次坑：
- * 列下标用 getDay()（周日 = 0，因为表头把"日"放在最左），
- * 但切段要收在周日（getDay() === 0）。两者都用 0 表示周日，
- * 却服务于不同的目的——曾经把切段条件写成"周六收尾"，
- * 结果 2026 年 10 月的 1/2/3 号（周四五六）自成一截，4 号（周日）掉到下一行，
- * 正是用户看到的"4 号没和 1 号同行"。
  */
 function weeksOfMonth(
   year: number,
@@ -139,14 +139,10 @@ function weeksOfMonth(
     current.push({
       date: toIso(year, month, day),
       day,
-      // getDay(): 周日 = 0 … 周六 = 6，正好就是列下标
-      column: weekday,
+      // getDay(): 周日 = 0 … 周六 = 6；换算成「周一 = 0 … 周日 = 6」
+      column: (weekday + 6) % 7,
     });
-    // **在周日（0）收尾**：周日是一周的最后一天。
-    // 这一条是用户实际指出的问题所在：2026-10-01 是周四，若在周六（10-03）收尾，
-    // 1/2/3 号就自成一截、4 号（周日）被挤到下一行与 5 号同行；
-    // 改成在周日收尾后，1/2/3/4 同段同行，5 号起才是新的一段。
-    // 本月最后一天也要收尾。
+    // 在周日收尾。本月最后一天也要收尾。
     if (weekday === 0 || day === totalDays) {
       weeks.push(current);
       current = [];
@@ -200,8 +196,8 @@ export function buildMonthWeeks<T extends { id: string; schedule: CardSchedule |
     const last = week[week.length - 1];
 
     // 本周可见的区间。
-    // 列区间同样按星期几算：沿用上一周时起点固定在周日（列 0），
-    // 延续到下一周时终点固定在周六（列 6）。
+    // 列区间同样按星期几算：沿用上一周时起点固定在周一（列 0），
+    // 延续到下一周时终点固定在周日（列 6）。
     const candidates: Array<{ card: T; startColumn: number; endColumn: number; startsHere: boolean; endsHere: boolean }> = [];
     for (const card of relevant) {
       const schedule = card.schedule;
@@ -215,12 +211,12 @@ export function buildMonthWeeks<T extends { id: string; schedule: CardSchedule |
       let endColumn = 6;
       if (startsHere) {
         const target = splitIsoDate(schedule.start);
-        // getDay() 就是列下标：0 = 周日 … 6 = 周六
-        if (target) startColumn = new Date(target.year, target.month - 1, target.day).getDay();
+        // 与日期圆同一套映射：周一 = 0 … 周日 = 6
+        if (target) startColumn = (new Date(target.year, target.month - 1, target.day).getDay() + 6) % 7;
       }
       if (endsHere) {
         const target = splitIsoDate(schedule.end);
-        if (target) endColumn = new Date(target.year, target.month - 1, target.day).getDay();
+        if (target) endColumn = (new Date(target.year, target.month - 1, target.day).getDay() + 6) % 7;
       }
       if (endColumn < startColumn) continue;
 
