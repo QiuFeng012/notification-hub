@@ -67,33 +67,85 @@ interface RawDate {
   month: number;
   day: number;
   year: number | null;
+  /**
+   * 这个月是"借"来的：文本里只写了「22号」，没说月份。
+   * 供 inferYear 判断用——借来的月份在跨年时需要另行考虑。
+   */
+  monthOmitted?: boolean;
 }
 
-const FULL_DATE = /(\d{4})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})\s*日?/g;
-const MONTH_DAY = /(\d{1,2})\s*月\s*(\d{1,2})\s*日/g;
+const FULL_DATE = /(\d{4})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})\s*[日号]?/g;
+/**
+ * 「10月22日」与「10月22号」都要认。
+ *
+ * 曾经只认「日」，于是「10月22号（第八周周四）14:30-17:30」里的日期
+ * 一个字都读不出来，解析退到星期分支、按锚点那一周算成了 10-15，
+ * 差整整七天。中文通知里「号」是最常见的写法之一，不能只认「日」。
+ */
+const MONTH_DAY = /(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]/g;
 /** 单独的 M/D，要求两侧不是数字，避免把 14:00 之类的时刻误判成日期 */
 const SLASH_DATE = /(?<![\d:])(\d{1,2})\s*[/.]\s*(\d{1,2})(?![\d:])/g;
+/**
+ * 只有日、没有月份：「22号」「22日」。
+ * 月份沿用文本里**最近一个写出来的月份**（例如「10月30号、11月2号」各自跟对月份），
+ * 一个都没有时用锚点的月份。
+ *
+ * 特意排掉「周」前面那个数字：「第八周周四」归一化后是「第8周周四」，
+ * 那个 8 是教学周次而不是 8 号。不排掉的话「第八周周四」会被排成 8 号，
+ * 等于又在猜日期——而教学周没有学期起始日是算不出来的，这种情况该是"排不上日历"。
+ *
+ * 另外它只能做到"按字面取日期"：「22号、25号」这种枚举会被读成 22–25 的区间，
+ * 而「第8号文件」这种编号会被当成 8 号。前者在通知里本就少见，
+ * 后者要区分需要语义判断；两者都是这条规则已知的取舍。
+ */
+const DAY_ONLY = /(?<![\d])(\d{1,2})\s*[日号](?![周星期])/g;
 
-/** 收集文本中所有显式日期（不含相对日期） */
-function collectExplicitDates(text: string): RawDate[] {
+/**
+ * 收集文本中所有显式日期（不含相对日期）。
+ *
+ * 按"先整段、再月日、后单独日"的顺序把命中的片段替换成空格，
+ * 这样同一个日期不会被重复收集。
+ *
+ * @param anchor 相对日期与年份推断的锚点；单独日的月份也要从它取值，
+ *   所以这个函数不再是无状态的纯文本处理
+ */
+function collectExplicitDates(text: string, anchor: Date): RawDate[] {
   const dates: RawDate[] = [];
-  const remaining = text
+  /** 最近一个明确写出的月份，供只有日的写法沿用 */
+  let currentMonth: number | null = null;
+  const monthOr = (fallback: number) => currentMonth ?? fallback;
+
+  text
     .replace(FULL_DATE, (_match, year: string, month: string, day: string) => {
-      dates.push({ year: Number(year), month: Number(month), day: Number(day) });
+      const m = Number(month);
+      currentMonth = m;
+      dates.push({ year: Number(year), month: m, day: Number(day) });
       return ' ';
     })
     .replace(MONTH_DAY, (_match, month: string, day: string) => {
-      dates.push({ year: null, month: Number(month), day: Number(day) });
+      const m = Number(month);
+      currentMonth = m;
+      dates.push({ year: null, month: m, day: Number(day) });
+      return ' ';
+    })
+    .replace(DAY_ONLY, (_match, day: string) => {
+      const d = Number(day);
+      // 日必须像日期；1–31 之外直接丢弃，免得把编号之类的东西当日期
+      if (d < 1 || d > 31) return ' ';
+      const borrowed = monthOr(anchor.getMonth() + 1);
+      dates.push({ year: null, month: borrowed, day: d, monthOmitted: true });
       return ' ';
     })
     .replace(SLASH_DATE, (_match, month: string, day: string) => {
       const m = Number(month);
       const d = Number(day);
       // 只接受像日期的组合，排除 14/2 这类可能是时间的写法之外的噪声
-      if (m >= 1 && m <= 12 && d >= 1 && d <= 31) dates.push({ year: null, month: m, day: d });
+      if (m >= 1 && m <= 12 && d >= 1 && d <= 31) {
+        currentMonth = m;
+        dates.push({ year: null, month: m, day: d });
+      }
       return ' ';
     });
-  void remaining;
   return dates;
 }
 
@@ -177,6 +229,13 @@ export interface ParseScheduleOptions {
  *
  * 解析不出任何日期时返回 null——这**不是**失败，而是诚实地说"这条排不上日历"。
  * 猜一个日期放上去会让人误以为那是真的安排，比不显示糟得多。
+ *
+ * 优先级：显式日期 > 相对日期（今天/明天）> 星期（周五）。
+ * 后两者**只在文本里压根没出现日期写法时**才用。这条界线来自一次真实事故：
+ * 「10月22号（第八周周四）14:30-17:30」里的日期因为只认「日」没认「号」而解析失败，
+ * 于是退到星期分支、按锚点那一周算成了 10-15，而通知写的明明是 10-22。
+ * 现在这类写法能被正常解析；万一还有解析不出来的日期写法，
+ * 结果会是"排不上日历"（界面会如实告知），而不是一个悄悄错掉的日子。
  */
 export function parseSchedule(
   timeText: string | null | undefined,
@@ -188,7 +247,12 @@ export function parseSchedule(
   const text = normalizeDigits(raw);
   const anchor = options.anchor;
 
-  const explicit = collectExplicitDates(text);
+  const explicit = collectExplicitDates(text, anchor);
+  // 文本里**出现了像日期的写法**，就跟"提到了日子"同义。
+  // 这个标记要在逐条校验之前算出来：它记的是"文本提了日期"，
+  // 而不是"我们成功解析出了日期"。下面所有兜底分支都要看它——
+  // 文本已经写明某个日子时，绝不能用"本周四"之类的推测去顶替。
+  const hasExplicitDate = explicit.length > 0;
   const resolved: Date[] = [];
   // 记录每个日期的年份是否为推测所得，下标与 resolved 对齐。
   // 只标记"真正参与区间两端"的那些，而不是"文本里任意一个日期"——
@@ -201,11 +265,15 @@ export function parseSchedule(
     if (item.day < 1 || item.day > daysInMonth(item.year ?? anchor.getFullYear(), item.month)) continue;
     const year = item.year ?? inferYear(item.month, item.day, anchor).year;
     resolved.push(new Date(year, item.month - 1, item.day));
-    resolvedYearInferred.push(item.year === null);
+    // 年份是推测的，或者月份本身是从别处借来的（只写了「22号」），
+    // 界面上都该如实提示"这是推出来的"
+    resolvedYearInferred.push(item.year === null || item.monthOmitted === true);
   }
 
-  // 相对日期只在没有显式日期时使用，避免"3月5日（明天）"这种文本产生两个锚点
-  if (resolved.length === 0) {
+  // 相对日期只在没有显式日期时使用，避免"3月5日（明天）"这种文本产生两个锚点。
+  // 这里的 !hasExplicitDate 同时挡住"显式日期解析失败"的情形：
+  // 解析失败时 resolved 也是空的，但那不等于"文本没写日期"。
+  if (!hasExplicitDate) {
     for (const relative of RELATIVE_DAYS) {
       if (relative.pattern.test(text)) {
         const date = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate());
@@ -216,8 +284,8 @@ export function parseSchedule(
     }
   }
 
-  // 星期：本周五 / 下周一 等。仅在没有其他日期时使用
-  if (resolved.length === 0) {
+  // 星期：本周五 / 下周一 等。同样只在文本确实没提日期时才用。
+  if (!hasExplicitDate) {
     const weekdayMatch = WEEKDAY_PATTERN.exec(text);
     const weekday = weekdayMatch?.[1] ? WEEKDAY_INDEX[weekdayMatch[1]] : undefined;
     if (weekday !== undefined) {

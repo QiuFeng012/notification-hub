@@ -172,13 +172,28 @@ function rowToRevision(row: RevisionRow): CardRevision {
 }
 
 /**
+ * 排期解析的版本号。**改动 date-parser 的解析结果时必须 +1。**
+ *
+ * 排期是解析结果的**缓存**：改了解析器却不重算，旧卡片会一直显示按老规则算出的
+ * 那个日期，而且看不出来是旧的。加了版本号，启动时的回填就知道哪些该重算。
+ *
+ * 1：初版
+ * 2：修掉「10月22号」里的日期读不出来、退化成"本周周四"的缺陷
+ *    （示例：10月22号（第八周周四）被排到了 10-15）
+ */
+const SCHEDULE_VERSION = 2;
+
+/**
  * 轻量迁移：给老数据库补上没有的列。
  * SQLite 没有 "ADD COLUMN IF NOT EXISTS"，所以先查表结构再决定加不加。
- * 不做通用迁移框架——目前只有三处，等真有第五处再抽象。
+ * 不做通用迁移框架——目前只有这几处，等再多一处再抽象。
  *
  * schedule_computed 是刻意加的一列：schedule 为 NULL 有两种含义——
  * "算过但解析不出日期" 与 "还没算过（老数据）"。没有这个标记就无法区分，
  * 会导致老卡片永远进不了日历，或者每次启动都把所有卡片重算一遍。
+ *
+ * schedule_version 换掉了"算过没有"这个布尔量：光有布尔量答不出
+ * "按哪一版规则算的"，解析器一升级旧卡片就永远停在错的日期上。
  */
 function migrate(db: DatabaseSync): void {
   const columns = db.prepare(`PRAGMA table_info(cards)`).all() as unknown as Array<{ name: string }>;
@@ -195,6 +210,12 @@ function migrate(db: DatabaseSync): void {
     // 已有 schedule 的都是新数据（算过），老数据默认为 0 等着回填
     db.exec(`ALTER TABLE cards ADD COLUMN schedule_computed INTEGER NOT NULL DEFAULT 0`);
     db.exec(`UPDATE cards SET schedule_computed = 1 WHERE schedule IS NOT NULL`);
+  }
+  if (!has('schedule_version')) {
+    db.exec(`ALTER TABLE cards ADD COLUMN schedule_version INTEGER NOT NULL DEFAULT 0`);
+    // 已经算过的那些是按"上一版"算的，标成 1 让它们等着被重算；
+    // 没算过的保持 0，同样等着被算。
+    db.exec(`UPDATE cards SET schedule_version = 1 WHERE schedule_computed = 1`);
   }
   if (!has('updated_at')) {
     // 从未编辑过就是 NULL，界面据此判断要不要显示"已修改"标记
@@ -227,15 +248,16 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
   // 单用户本地应用 + node:sqlite 同步 API，不存在并发插入，MAX(seq)+1 是安全的
   const nextSeqStmt = db.prepare(`SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM cards`);
   const insertStmt = db.prepare(
-    `INSERT INTO cards (id, title, time, source, key_points, raw_text, provider, created_at, seq, keywords, schedule, schedule_computed, pinned)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+    `INSERT INTO cards (id, title, time, source, key_points, raw_text, provider, created_at, seq, keywords, schedule, schedule_computed, schedule_version, pinned)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
   );
   const setPinnedStmt = db.prepare(`UPDATE cards SET pinned = ? WHERE id = ?`);
   const deleteStmt = db.prepare(`DELETE FROM cards WHERE id = ?`);
   const updateStmt = db.prepare(
     `UPDATE cards
         SET title = ?, time = ?, source = ?, key_points = ?, schedule = ?,
-            schedule_computed = 1, updated_at = ?, revision_count = revision_count + 1
+            schedule_computed = 1, schedule_version = ?,
+            updated_at = ?, revision_count = revision_count + 1
       WHERE id = ?`,
   );
   const insertRevisionStmt = db.prepare(
@@ -250,29 +272,36 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
   const resetRevisionCountStmt = db.prepare(`UPDATE cards SET revision_count = 0 WHERE id = ?`);
 
   /**
-   * 回填历史卡片的排期。
+   * 重算排期：把按旧版（或从未）解析过的卡片重新解析一遍。
    *
-   * 日历功能上线前创建的卡片 schedule 是 NULL。如果不回填，
-   * 这些"老卡片"永远进不了日历，而这跟"解析不出日期"在界面上长得一样，
-   * 用户会以为功能坏了。
+   * 日历功能上线前创建的卡片 schedule 是 NULL。如果不重算，这些"老卡片"
+   * 永远进不了日历，而这跟"解析不出日期"在界面上长得一样，用户会以为功能坏了。
+   *
+   * 解析器修好之后（见 SCHEDULE_VERSION）同样需要这一步：排期是解析结果的缓存，
+   * 不重算的话旧卡片会一直显示按老规则算出来的那个日期。
    *
    * 锚点用卡片自己的创建时间，而不是"现在"——否则相对日期（今天/明天）
    * 会被按今天重新解释，把历史排期算到错误的日子上。
-   * 算不出来也标记为已算过，避免每次启动重复劳动。
+   * 解析不出来也标记为"按当前版本算过了"，避免每次启动重复劳动。
+   *
+   * 只动 schedule 与 schedule_version：不碰 updated_at、revision_count，
+   * 也不写改动历史——重算不是用户做的修改，不该在卡片上留下"已修改 N 次"。
    */
   function backfillSchedules(): void {
     const pending = db
-      .prepare(`SELECT id, time, created_at FROM cards WHERE schedule_computed = 0`)
-      .all() as unknown as Array<{ id: string; time: string | null; created_at: string }>;
+      .prepare(`SELECT id, time, created_at FROM cards WHERE schedule_version < ?`)
+      .all(SCHEDULE_VERSION) as unknown as Array<{ id: string; time: string | null; created_at: string }>;
     if (pending.length === 0) return;
 
-    const update = db.prepare(`UPDATE cards SET schedule = ?, schedule_computed = 1 WHERE id = ?`);
+    const update = db.prepare(
+      `UPDATE cards SET schedule = ?, schedule_computed = 1, schedule_version = ? WHERE id = ?`,
+    );
     for (const row of pending) {
       const anchor = new Date(row.created_at);
       const schedule = parseSchedule(row.time, {
         anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,
       });
-      update.run(schedule ? JSON.stringify(schedule) : null, row.id);
+      update.run(schedule ? JSON.stringify(schedule) : null, SCHEDULE_VERSION, row.id);
     }
   }
 
@@ -309,6 +338,7 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
         Number(next),
         JSON.stringify(card.keywords),
         card.schedule ? JSON.stringify(card.schedule) : null,
+        SCHEDULE_VERSION,
         card.pinned ? 1 : 0,
       );
       return card;
@@ -350,6 +380,7 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
         nextSource,
         JSON.stringify(nextKeyPoints),
         nextSchedule ? JSON.stringify(nextSchedule) : null,
+        SCHEDULE_VERSION,
         now,
         id,
       );

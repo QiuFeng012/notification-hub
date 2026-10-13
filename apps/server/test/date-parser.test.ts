@@ -261,6 +261,87 @@ describe('parseSchedule 解析不出来的情况', () => {
   });
 });
 
+/**
+ * 「号」这个写法来自一次真实事故：
+ * 卡片的 time 是「10月22号（第八周周四）14:30-17:30」，而日历把它排在 10-15。
+ * 原因是 MONTH_DAY 只匹配「日」不匹配「号」，日期一个字都没读出来，
+ * 解析于是退到星期分支、按锚点那一周的周四算，差了整整七天。
+ *
+ * 这批用例锁的就是"别再退回星期分支"这条界线。
+ */
+describe('parseSchedule 「号」写法与日期优先于星期', () => {
+  it('10月22号（第八周周四）按日期排，不按星期猜', () => {
+    // 差七天的那个原始输入：正确结果是 10-22，不是锚点那周的周四 10-09
+    const result = schedule('10月22号（第八周周四）14:30-17:30');
+    assert.equal(result?.start, '2025-10-22');
+    assert.equal(result?.end, '2025-10-22');
+    assert.equal(result?.dayCount, 1);
+  });
+
+  it('「号」与「日」解析结果一致', () => {
+    const withHao = schedule('10月22号14:30-17:30');
+    const withRi = schedule('10月22日14:30-17:30');
+    assert.ok(withHao, '「号」写法不该解析不出来');
+    assert.equal(withHao?.start, withRi?.start);
+    assert.equal(withHao?.end, withRi?.end);
+  });
+
+  it('年月日全写且用「号」', () => {
+    assert.equal(schedule('2026年10月22号')?.start, '2026-10-22');
+    assert.equal(schedule('2026年10月22号')?.inferredYear, false);
+  });
+
+  it('区间端点用「号」也能形成区间', () => {
+    const result = schedule('3月5号开放，3月8号24:00前完成');
+    assert.equal(result?.start, '2025-03-05');
+    assert.equal(result?.end, '2025-03-08');
+    assert.equal(result?.dayCount, 4);
+  });
+
+  it('省略月份时沿用文中最近的月份', () => {
+    const result = schedule('10月30号、11月2号');
+    assert.equal(result?.start, '2025-10-30');
+    assert.equal(result?.end, '2025-11-02');
+  });
+
+  it('只写「22号」时月份取自锚点，并如实标记为推测', () => {
+    // 锚点是 2025-03-05，所以月份取 3
+    const result = schedule('22号截止');
+    assert.equal(result?.start, '2025-03-22');
+    assert.equal(result?.inferredYear, true, '月份是从别处借来的，界面该提示这是推出来的');
+  });
+
+  it('文本里写了日期时，解析结果以日期为准、不用星期顶替', () => {
+    // 「周四」在这里只是补充说明。锚点是 2025-03-05（周三），
+    // 那一周的周四是 03-06——如果日期没被读出来，结果就会是 03-06 而不是 10-22。
+    const result = schedule('10月22号（第八周周四）14:30-17:30');
+    assert.equal(result?.start, '2025-10-22');
+    assert.notEqual(result?.start, '2025-03-06', '不该退回"锚点那一周的周四"');
+  });
+
+  it('文本里的日期写法解析失败时，不排期而不是按星期猜', () => {
+    // 「13月5日」是像日期但读不出结果的写法：这时必须不排期。
+    // 曾经的行为是"没读到日期就退到星期分支"，于是一个坏日期会变成
+    // 一个看起来正常、实际错掉的日期——正是这次事故的机制。
+    const anchor = new Date(2025, 2, 5, 10, 0, 0); // 周三
+    assert.equal(schedule('13月5日（周四）截止', anchor), null);
+  });
+
+  it('教学周写法目前排不上日历（未实现，非猜测）', () => {
+    // 「第八周周四」没有学期起始日就算不出来，项目里也没有这个配置。
+    // 当前它既没有"日/号"日期可读，就落到星期兜底上，结果等于"本周四"——
+    // 也就是 03-06 这个**大概率不对但至少不是乱排**的值。
+    // 这条用例记录的是现状边界，不是期望值；真要做对需要先有"学期起始日"配置。
+    assert.equal(schedule('第八周（周四）')?.start, '2025-03-06');
+  });
+
+  it('「第8号文件」这类编号不会被当成日期', () => {
+    // 8 号本身像日期，所以这条会排期；记录当前取舍，不是为了证明它完美
+    // （真要区分编号与日期需要语义判断，代价远大于收益）
+    assert.ok(schedule('第8号文件') !== null);
+  });
+});
+
 describe('parseSchedule 返回的 label', () => {
   it('保留原文，便于界面解释为什么排在这天', () => {
     const result = schedule('3月8日24:00前');

@@ -323,6 +323,63 @@ describe('sqlite 仓储', () => {
     }
   });
 
+  it('解析器修好后会重算旧卡片按老规则算出的排期', () => {
+    const dbPath = tempDbPath();
+    mkdirSync(path.dirname(dbPath), { recursive: true });
+    const legacy = new DatabaseSync(dbPath);
+    // 表结构照搬当前 SCHEMA（含 schedule_version），只差"这一行是旧排期"
+    legacy.exec(`
+      CREATE TABLE cards (
+        id             TEXT PRIMARY KEY,
+        title          TEXT NOT NULL,
+        time           TEXT,
+        source         TEXT,
+        key_points     TEXT NOT NULL,
+        raw_text       TEXT NOT NULL,
+        provider       TEXT NOT NULL,
+        created_at     TEXT NOT NULL,
+        seq            INTEGER NOT NULL DEFAULT 0,
+        keywords       TEXT NOT NULL DEFAULT '{}',
+        schedule       TEXT,
+        updated_at     TEXT,
+        revision_count INTEGER NOT NULL DEFAULT 0,
+        pinned         INTEGER NOT NULL DEFAULT 0,
+        schedule_computed INTEGER NOT NULL DEFAULT 0,
+        schedule_version  INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    // 这就是那起真实事故：文本写的是 10月22号，旧解析器没认出来，
+    // 退到星期分支算成了 10-15（锚点 10-13 所在那一周的周四）。
+    legacy
+      .prepare(
+        `INSERT INTO cards
+           (id, title, time, key_points, raw_text, provider, created_at, seq, schedule, schedule_computed, schedule_version)
+         VALUES ('old', '宿舍内务卫生检查', '10月22号（第八周周四）14:30-17:30',
+                 '["要点"]', '原文', 'mock', '2026-10-13T04:18:03.869Z', 1,
+                 '{"start":"2026-10-15","end":"2026-10-15","dayCount":1,"label":"10月22号（第八周周四）14:30-17:30","inferredYear":true}',
+                 1, 1)`,
+      )
+      .run();
+    legacy.close();
+
+    const repo = createSqliteCardRepository(dbPath);
+    try {
+      // 排期是解析结果的缓存，解析器升级后必须重算，否则旧卡片会一直停在错的日期
+      assert.equal(repo.get('old')?.schedule?.start, '2026-10-22');
+      assert.equal(repo.get('old')?.schedule?.end, '2026-10-22');
+    } finally {
+      repo.close();
+    }
+
+    // 版本记到当前值，第二次打开不该再重算
+    const inspect = new DatabaseSync(dbPath);
+    const row = inspect
+      .prepare(`SELECT schedule_version FROM cards WHERE id = 'old'`)
+      .get() as unknown as { schedule_version: number };
+    inspect.close();
+    assert.equal(Number(row.schedule_version), 2, '重算后应记下当前解析版本');
+  });
+
   it('中文与换行内容不会损坏', () => {
     const repo = createSqliteCardRepository(tempDbPath());
     try {
