@@ -186,6 +186,21 @@ Check "停止脚本不会误杀其他 node 进程" `
 Check "启动脚本支持检测端口占用" ($startScript -match 'Get-NetTCPConnection')
 Check "启动脚本等待服务就绪而不是盲目打开页面" ($startScript -match 'Test-ServiceReady')
 
+# 日历的星期表头与周行必须共用同一套盒子模型（左边界、宽度、列间距、内边距）。
+# 曾经它们各写各的：表头只有 gap，周行另加 padding 与边框，列宽差了 2.7px，
+# 偏差按列累加，表现为"周日日期没对齐"。真正的对齐由 pnpm verify:ui 在真实
+# 浏览器里量，这里只挡住"把这条共用规则拆开"——那是错位的第一步。
+$stylesPath = Join-Path $repoRoot 'apps\web\src\styles.css'
+if (Test-Path $stylesPath) {
+  $styles = Get-Content $stylesPath -Raw
+  Check "日历表头与周行共用同一条几何规则" `
+    ($styles -match '(?s)\.calendar__grid-row,\s*\.calendar__weekdays,\s*\.calendar__week\s*\{[^}]*padding:\s*6px')
+  Check "日历周行的框用 outline（不占布局，不挤窄内部栅格）" `
+    ($styles -match '(?s)\.calendar__week\s*\{[^}]*outline:\s*1px solid')
+  Check "日历区间在栅格列里居中（否则单日圆会落在两列之间）" `
+    ($styles -match '(?s)\.span\s*\{[^}]*justify-self:\s*center')
+}
+
 # 真正执行每个脚本。语法解析查不出参数默认值这类运行时错误：
 # 曾经把 RepoRoot 的默认值写成 (Split-Path -Parent $PSScriptRoot)，
 # 而参数默认值在 $PSScriptRoot 赋值之前求值，双击必然报错、脚本完全不可用，

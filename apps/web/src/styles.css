@@ -861,11 +861,33 @@ body {
   color: var(--warn);
 }
 
-/* 星期表头：与周行的列宽一致 */
-.calendar__weekdays {
+/**
+ * 星期表头与周行共用同一套盒模型。
+ *
+ * 这两处必须**逐像素对齐**：表头一列对应周行的一列，日期圆就落在那一列的正中。
+ * 曾经的问题正是它们各写各的——表头只有 `gap: 4px`，周行另加了 `padding: 6px`
+ * 和 1px 边框，于是两边的列宽不同（147.4px 对 144.7px），偏差按列线性累加：
+ * 周一差 +6px、周四恰好为 0（所以在中间列看不出来）、**周日差 -6px**，
+ * 表现为"周日日期没对齐"。
+ *
+ * 所以外层的左边界、宽度、列间距、横向内边距都写在同一条规则里，
+ * 两边标记上也共用 `calendar__grid-row` 这个类名——谁也不要单独改动其中一项。
+ */
+.calendar__grid-row,
+.calendar__weekdays,
+.calendar__week {
   display: grid;
   gap: 4px;
+  /* 内边距计入宽度，列宽才是确定的（content-box 下这里会再错一次） */
+  box-sizing: border-box;
+  padding: 6px;
+}
+
+.calendar__weekdays {
   padding-bottom: 2px;
+  /* 与周行同宽：周行用 outline 画框（不占布局），所以这里补 1px 透明边框，
+     否则表头会比周行宽 2px，右边的周日又差回去。 */
+  border: 1px solid transparent;
 }
 
 .calendar__weekday {
@@ -884,17 +906,18 @@ body {
  * 每个周一块：第一行是日期圆，第二行起是区间。
  * 列宽用 1fr 等分，圆居中在列内，区间横跨 startColumn..endColumn。
  *
+ * 框用 outline 而不是 border：border 会被 border-box 算进宽度，
+ * 把它内部的栅格挤窄 2px，于是又和表头错开（这正是"周日没对齐"的成因）。
+ * outline 不参与布局，所以内部列宽与表头完全相同。
+ *
  * row-gap 不能省：日期圆和区间条都是 26px 高，
  * 行距为 0 时区间条会直接压在日期圆上，看起来像叠在一起。
  */
 .calendar__week {
-  display: grid;
   grid-template-rows: repeat(2, 26px);
   grid-auto-rows: 26px;
-  column-gap: 4px;
   row-gap: 6px;
-  padding: 6px 6px 7px;
-  border: 1px solid var(--border);
+  outline: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-elevated);
 }
@@ -953,6 +976,10 @@ body {
   background: transparent;
   font-family: inherit;
   cursor: pointer;
+  /* 必须居中：区间放在栅格列里，不加这一条会贴着列左边，
+     单日圆点就会落在两列日期之间（实测偏了约 60px）。
+     区间本身仍有 width: 100% 撑满跨列宽度，所以多日条不受影响。 */
+  justify-self: center;
 }
 
 /* 单日：只是一个实心圆，宽度与日期圆一致，便于对齐 */

@@ -341,7 +341,7 @@ export function CalendarView({
       ) : null}
 
       <div
-        className="calendar__weekdays"
+        className="calendar__grid-row calendar__weekdays"
         style={{ gridTemplateColumns: `repeat(${CALENDAR_COLUMNS}, minmax(0, 1fr))` }}
       >
         {WEEKDAY_LABELS.map((label) => (
@@ -360,7 +360,7 @@ export function CalendarView({
           {weeks.map((week) => (
             <div
               key={week.days[0]?.date ?? 'week'}
-              className="calendar__week"
+              className="calendar__grid-row calendar__week"
               data-testid="calendar-week"
               data-days={week.days.length}
               style={{ gridTemplateColumns: `repeat(${CALENDAR_COLUMNS}, minmax(0, 1fr))` }}

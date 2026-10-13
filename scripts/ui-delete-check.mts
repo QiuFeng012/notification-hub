@@ -42,6 +42,113 @@ function check(label: string, condition: boolean, detail = ''): void {
   process.exitCode = 1;
 }
 
+/**
+ * 日历的列对齐检查。
+ *
+ * 判据是**同列必须同心**：日期圆与星期表头若不是共用同一套栅格，
+ * 它们的中心就会按列线性错开——这正是那次真实缺陷的样子：
+ * 表头只有 `gap: 4px`，周行另加了 `padding: 6px` 和边框，
+ * 两边列宽不同，偏差按列累加（周一 +6px、周四恰好 0、**周日 -6px**），
+ * 表现成"周日日期没对齐"。反过来说，只看日期之间是否等距是查不出来的，
+ * 必须拿表头当基准。
+ *
+ * 两个刻意的实现细节：
+ *   · **窗口左边框不参与比较。** 它是 Chromium 的滚动条/边框产生的固定偏移，
+ *     两边都有；减掉它才不会把无关的偏移算成列错位。
+ *   · **不拿"单元格宽度 + gap"当列距。** 栅格单元格的 getBoundingClientRect
+ *     宽度并不等于轨道宽度（亚像素分配时 7 列会各差零点几像素），
+ *     据此推算列中心会累计出好几像素的假偏差——这条检查第一版就是这么写错的。
+ *     改成两边各自用最小二乘拟合出列距，再逐列比中心。
+ *
+ * 容差 2px：实测同心误差在 1px 内，而那个缺陷是 6px，两者拉得很开。
+ *
+ * 返回问题列表，空数组表示对齐。
+ */
+async function measureCalendarAlignment(cdp: {
+  evaluate<T>(expression: string): Promise<T>;
+}): Promise<string[]> {
+  return cdp.evaluate<string[]>(`
+    (() => {
+      const problems = [];
+      const labels = [...document.querySelectorAll('.calendar__weekday')];
+      const rows = [...document.querySelectorAll('.calendar__week')];
+      if (labels.length !== 7) return ['星期表头不是 7 列：' + labels.length];
+      if (rows.length === 0) return ['没有周行'];
+
+      const headerLeft = document.querySelector('.calendar__weekdays').getBoundingClientRect().left;
+      const headerCenters = labels.map((el) => {
+        const r = el.getBoundingClientRect();
+        return r.left + r.width / 2 - headerLeft;
+      });
+
+      // 每一列的日期圆中心：同一列在不同周里会差零点几像素（亚像素舍入），
+      // 取平均把它抹平
+      const byColumn = new Map();
+      for (const row of rows) {
+        for (const day of row.querySelectorAll('.day-circle')) {
+          const date = day.dataset.date;
+          if (!date) continue;
+          const column = (new Date(date + 'T00:00:00').getDay() + 6) % 7;
+          const r = day.getBoundingClientRect();
+          const cx = r.left + r.width / 2 - headerLeft;
+          const list = byColumn.get(column) ?? [];
+          list.push(cx);
+          byColumn.set(column, list);
+        }
+      }
+
+      const columns = [...byColumn.keys()].sort((a, b) => a - b);
+      if (columns.length < 2) return ['可见的日期列不足 2 列，无法判断对齐'];
+      const dayCenters = new Map(
+        columns.map((column) => {
+          const list = byColumn.get(column);
+          return [column, list.reduce((sum, value) => sum + value, 0) / list.length];
+        }),
+      );
+
+      // 最小二乘拟合 中心 = base + column * pitch，两边各拟合一次
+      const fit = (pairs) => {
+        const n = pairs.length;
+        const sumX = pairs.reduce((s, [x]) => s + x, 0);
+        const sumY = pairs.reduce((s, [, y]) => s + y, 0);
+        const sumXY = pairs.reduce((s, [x, y]) => s + x * y, 0);
+        const sumXX = pairs.reduce((s, [x]) => s + x * x, 0);
+        const denominator = n * sumXX - sumX * sumX;
+        if (denominator === 0) return { base: 0, pitch: 0 };
+        const pitch = (n * sumXY - sumX * sumY) / denominator;
+        return { base: (sumY - pitch * sumX) / n, pitch };
+      };
+
+      const headerFit = fit(headerCenters.map((cx, column) => [column, cx]));
+      const dayFit = fit(columns.map((column) => [column, dayCenters.get(column)]));
+
+      if (Math.abs(headerFit.pitch - dayFit.pitch) > 0.5) {
+        problems.push(
+          '表头与日期的列距不同：' + headerFit.pitch.toFixed(2) + ' vs ' + dayFit.pitch.toFixed(2),
+        );
+      }
+
+      let worst = 0;
+      let worstColumn = -1;
+      for (const column of columns) {
+        const expected = headerFit.base + headerFit.pitch * column;
+        const actual = dayCenters.get(column);
+        const delta = Math.abs(actual - expected);
+        if (delta > worst) {
+          worst = delta;
+          worstColumn = column;
+        }
+      }
+      if (worst > 2) {
+        problems.push(
+          '第 ' + (worstColumn + 1) + ' 列偏差 ' + worst.toFixed(2) + 'px（容差 2px）',
+        );
+      }
+      return problems;
+    })()
+  `);
+}
+
 const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'notification-hub-ui-'));
 const browser = spawn(
   browserPath,
@@ -206,6 +313,49 @@ async function main(): Promise<void> {
   const beforeIds = await cardIds();
   // 一张卡都没有也能跑：脚本只动自己新建的那张，绝不碰已有数据
   console.log(`     信息卡页当前渲染 ${before} 张卡${before === 0 ? '（空库）' : ''}`);
+
+  // ---------- 2b. 日历视图的列对齐 ----------
+  // 日历此前完全没被界面验证覆盖，而"周日没对齐"正是一处纯渲染缺陷：
+  // 已算出的列下标是对的，是 CSS 的盒子模型把列宽搞歪了——所以这类问题
+  // 只能靠"在真实浏览器里量表头与日期的中心"来发现。
+  console.log('2b. 日历视图：日期是否落在所属星期的列中心');
+  check('切到「日历视图」', await cdp.evaluate<boolean>(`
+    (() => {
+      const tab = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('日历视图'));
+      if (!tab) return false;
+      tab.click();
+      return true;
+    })()
+  `));
+  await sleep(800);
+
+  const aligned = await measureCalendarAlignment(cdp);
+  check('本月各列与星期表头对齐', aligned.length === 0, aligned.join('；'));
+
+  // 换一个月再量一次：不同月份首末周的空列数不同，
+  // 只测一个月有可能恰好躲过那种只在特定月出现的错位
+  check('日历能翻到上个月', await cdp.evaluate<boolean>(`
+    (() => {
+      const previous = document.querySelector('.calendar__nav button[aria-label="上个月"]');
+      if (!previous) return false;
+      previous.click();
+      return true;
+    })()
+  `));
+  await sleep(700);
+  const alignedPrevious = await measureCalendarAlignment(cdp);
+  check('上个月各列同样对齐', alignedPrevious.length === 0, alignedPrevious.join('；'));
+
+  // 回到卡片列表，恢复第 3 步开始时的页面状态
+  check('切回「卡片列表」', await cdp.evaluate<boolean>(`
+    (() => {
+      const tab = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('卡片列表'));
+      if (!tab) return false;
+      tab.click();
+      return true;
+    })()
+  `));
+  await sleep(600);
 
   check('点了「设置」按钮', await clickNav('设置'));
   await sleep(600);
