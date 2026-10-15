@@ -353,8 +353,16 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
       const nextSource = patch.source !== undefined ? patch.source : existing.source;
       const nextKeyPoints = patch.keyPoints ?? existing.keyPoints;
 
-      // 时间变了就重算排期。锚点仍用卡片创建时间：
-      // 相对日期（"明天"）指的是通知到达那天，不是改动的这天。
+      // 排期**每次都重算**，不只在时间文本变化时算。
+      //
+      // 两个理由：
+      //   1. 它本来就是"当前时间文本的确定性函数"，重复算结果一致，不引入不确定性；
+      //   2. 只认"时间变了"会漏掉一类真实情况——用户这轮只改了标题或要点，
+      //      但时间文本其实早就该重新解析了（比如解析规则本身修过、
+      //      或上一次保存时文本恰好没能解析出来）。那时排期会一直停在旧的错值上，
+      //      而用户在界面上改的明明是别的东西，根本不会想到日历要跟着动。
+      //
+      // 锚点仍用卡片创建时间：相对日期（"明天"）指的是通知到达那天，不是改动的这天。
       const anchor = new Date(existing.createdAt);
       const nextSchedule = parseSchedule(nextTime, {
         anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,

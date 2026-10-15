@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+﻿import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_HIGHLIGHT_STYLE } from '@notification-hub/shared';
@@ -54,7 +54,16 @@ function createFakeApi(options: FakeApiOptions = {}) {
     listRevisions: vi.fn(async () => []),
     clearRevisions: vi.fn(async () => undefined),
     // 置顶要保留卡片原有内容，只翻 pinned——否则测试里会把标题也一起换掉
-    setPinned: vi.fn(async (id: string, pinned: boolean) => ({
+  previewReExtract: vi.fn(async (_id: string, rawText: string) => ({
+    rawText,
+    title: '官方修改后的标题',
+    time: '2026年10月22日',
+    source: '教务处',
+    keyPoints: ['官方修改后的要点'],
+    provider: 'mock' as const,
+    schedule: { start: '2026-10-22', end: '2026-10-22', dayCount: 1, label: '2026年10月22日', inferredYear: false },
+    supplementedKeywords: [],
+  })),    setPinned: vi.fn(async (id: string, pinned: boolean) => ({
       ...((options.initial ?? []).find((card) => card.id === id) ?? makeCard()),
       id,
       pinned,

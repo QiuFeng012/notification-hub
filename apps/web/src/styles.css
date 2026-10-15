@@ -1383,6 +1383,134 @@ body {
   margin-top: 6px;
 }
 
+/* ---------- 重新提炼（官方改口径） ---------- */
+
+.re-extract {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+}
+
+.re-extract__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.re-extract__desc {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.re-extract__input {
+  width: 100%;
+  min-height: 96px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+  resize: vertical;
+}
+
+.re-extract__input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.re-extract__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 逐项对比：左边是原来的，右边是新提炼出来的 */
+.re-extract__diff {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+}
+
+.re-extract__row {
+  display: grid;
+  grid-template-columns: 68px minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.re-extract__row:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+
+.re-extract__field {
+  color: var(--text-dim);
+  font-size: 12px;
+  padding-top: 2px;
+}
+
+.re-extract__old {
+  color: var(--text-dim);
+  text-decoration: line-through;
+  text-decoration-color: var(--border-strong);
+  word-break: break-word;
+}
+
+.re-extract__new {
+  color: var(--text);
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.re-extract__new--empty {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.re-extract__row .button {
+  padding: 4px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.re-extract__points {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.re-extract__note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11.5px;
+  line-height: 1.6;
+}
+
+@media (max-width: 640px) {
+  .re-extract__row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* 已修改标记 */
 .chip--edited {
   border-color: var(--warn-line);

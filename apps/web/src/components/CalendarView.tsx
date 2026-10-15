@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type {
   CardRevision,
   HighlightStyle,
+  ReExtractPreview,
   UpdateCardRequest,
   UpdateSettingsRequest,
 } from '@notification-hub/shared';
@@ -48,6 +49,8 @@ interface CalendarViewProps {
   onSaveHighlight: (patch: UpdateSettingsRequest) => Promise<boolean>;
   /** 提交对某张卡片的修改；返回是否成功 */
   onEdit: (id: string, patch: UpdateCardRequest) => Promise<boolean>;
+  /** 用一段新原文重新提炼，只回草稿；官方改口径时用 */
+  onReExtract: (id: string, rawText: string) => Promise<ReExtractPreview>;
   onLoadRevisions: (id: string) => Promise<CardRevision[]>;
   onClearRevisions: (id: string) => Promise<void>;
   /** 今天，格式 YYYY-MM-DD；注入是为了测试可确定 */
@@ -79,6 +82,7 @@ export function CalendarView({
   highlight,
   onSaveHighlight,
   onEdit,
+  onReExtract,
   onLoadRevisions,
   onClearRevisions,
   today,
@@ -420,6 +424,7 @@ export function CalendarView({
                           if (ok) setEditingDetailsId(null);
                           return ok;
                         }}
+                        onReExtract={(rawText) => onReExtract(card.id, rawText)}
                         onCancel={() => setEditingDetailsId(null)}
                       />
                     </li>

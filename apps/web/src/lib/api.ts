@@ -3,8 +3,10 @@ import {
   HEX_COLOR_PATTERN,
   type CardListResponse,
   type CardRevision,
+  type CardSchedule,
   type HighlightStyle,
   type InfoCard,
+  type ReExtractPreview,
   type SettingsSource,
   type SettingsView,
   type UpdateCardRequest,
@@ -74,6 +76,11 @@ export interface CardApi {
   createCard(rawText: string, keywords?: string[]): Promise<CardView>;
   /** 编辑一张卡片；返回更新后的卡片 */
   updateCard(id: string, patch: UpdateCardRequest): Promise<CardView>;
+  /**
+   * 用一段新原文重新提炼，返回草稿供逐项对比；**不会改动卡片**。
+   * 官方改了口径时用它，确认之后再由 updateCard 落库。
+   */
+  previewReExtract(id: string, rawText: string): Promise<ReExtractPreview>;
   /** 某张卡片的改动历史，最新的在最前 */
   listRevisions(id: string): Promise<CardRevision[]>;
   /** 清空某张卡片的改动历史（内容不动） */
@@ -119,6 +126,29 @@ export function createCardApi(): CardApi {
       return view;
     },
 
+    async previewReExtract(id: string, rawText: string) {
+      const payload = (await requestJson(`/api/cards/${encodeURIComponent(id)}/re-extract`, {
+        method: 'POST',
+        json: { rawText },
+      })) as Partial<ReExtractPreview> | null;
+
+      if (!payload || typeof payload.title !== 'string' || !Array.isArray(payload.keyPoints)) {
+        throw new ApiError('INVALID_RESPONSE', '服务端返回的提炼结果格式不正确', 500);
+      }
+      return {
+        rawText: typeof payload.rawText === 'string' ? payload.rawText : rawText,
+        title: payload.title,
+        time: typeof payload.time === 'string' && payload.time.length > 0 ? payload.time : null,
+        source: typeof payload.source === 'string' && payload.source.length > 0 ? payload.source : null,
+        keyPoints: payload.keyPoints.filter((item): item is string => typeof item === 'string'),
+        provider: payload.provider === 'deepseek' ? 'deepseek' : 'mock',
+        schedule: toScheduleOrNull(payload.schedule),
+        supplementedKeywords: Array.isArray(payload.supplementedKeywords)
+          ? payload.supplementedKeywords.filter((item): item is string => typeof item === 'string')
+          : [],
+      };
+    },
+
     async listRevisions(id: string) {
       const payload = (await requestJson(`/api/cards/${encodeURIComponent(id)}/revisions`)) as {
         revisions?: unknown;
@@ -149,6 +179,23 @@ export function createCardApi(): CardApi {
     async deleteCard(id: string) {
       await requestJson(`/api/cards/${encodeURIComponent(id)}`, { method: 'DELETE' });
     },
+  };
+}
+
+/**
+ * 归一化服务端返回的排期。字段缺失或类型不对时返回 null
+ * （宁可"没有排期"，也不要拿一个半截对象去画日历）。
+ */
+function toScheduleOrNull(input: unknown): CardSchedule | null {
+  if (typeof input !== 'object' || input === null) return null;
+  const record = input as Record<string, unknown>;
+  if (typeof record.start !== 'string' || typeof record.end !== 'string') return null;
+  return {
+    start: record.start,
+    end: record.end,
+    dayCount: typeof record.dayCount === 'number' ? record.dayCount : 1,
+    label: typeof record.label === 'string' ? record.label : '',
+    inferredYear: record.inferredYear === true,
   };
 }
 

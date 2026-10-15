@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import type { CardKeywords, CardRevision, UpdateCardRequest } from '@notification-hub/shared';
+﻿import { useEffect, useRef, useState } from 'react';
+import type { CardKeywords, CardRevision, ReExtractPreview, UpdateCardRequest } from '@notification-hub/shared';
 import { formatRelative, formatScheduleRange, type CardView } from '../lib/card-view';
 import { isExpired } from '../lib/sort';
 import { CardEditForm } from './CardEditForm';
@@ -9,6 +9,8 @@ interface CardItemProps {
   card: CardView;
   /** 提交修改；返回是否成功 */
   onEdit: (id: string, patch: UpdateCardRequest) => Promise<boolean>;
+  /** 用一段新原文重新提炼，只回草稿；官方改口径时用 */
+  onReExtract: (id: string, rawText: string) => Promise<ReExtractPreview>;
   onLoadRevisions: (id: string) => Promise<CardRevision[]>;
   onClearRevisions: (id: string) => Promise<void>;
   /** 置顶 / 取消置顶 */
@@ -92,6 +94,7 @@ const FALLBACK_PREFIX = '（关注点）';
 export function CardItem({
   card,
   onEdit,
+  onReExtract,
   onLoadRevisions,
   onClearRevisions,
   onTogglePin,
@@ -139,6 +142,7 @@ export function CardItem({
             if (ok) setEditing(false);
             return ok;
           }}
+          onReExtract={(rawText) => onReExtract(card.id, rawText)}
           onCancel={() => setEditing(false)}
         />
       </article>

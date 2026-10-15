@@ -12,6 +12,7 @@ import {
   type CardKeywords,
   type CardRevision,
   type InfoCard,
+  type ReExtractPreview,
 } from '@notification-hub/shared';
 import type { Summarizer } from '../ai/types.js';
 import type { SummarizerProvider } from '../ai/provider.js';
@@ -43,6 +44,11 @@ export interface CardService {
   getCard(id: string): InfoCard | null;
   /** 编辑一张信息卡；目标不存在返回 null */
   updateCard(id: string, input: unknown): InfoCard | null;
+  /**
+   * 用一段新原文重新提炼，返回草稿供用户逐项对比；**不落库**。
+   * 目标卡片不存在返回 null。
+   */
+  previewReExtract(id: string, input: { rawText: unknown }): Promise<ReExtractPreview | null>;
   /** 某张卡片的改动历史 */
   listRevisions(id: string): CardRevision[];
   /** 清空某张卡片的改动历史；目标不存在返回 null */
@@ -257,6 +263,45 @@ export function createCardService(
       assertCardId(id);
       const { patch, reason, note } = normalizeCardPatch(input);
       return repo.update(id, patch, reason, note);
+    },
+
+    /**
+     * 官方改了口径：把新原文重新提炼一遍，回一份草稿给界面做逐项对比。
+     *
+     * 三处刻意的设计：
+     *   · **不落库**。这是"看一眼再决定"，不是一次修改；直接写会让用户
+     *     在还没确认时就已经改了卡片，而改动历史又记了一笔不知道算不算的账。
+     *   · **沿用卡片自己的关注点**。keywords.priority 是"用户当初在意什么"，
+     *     官方改了原文不等于他不再在意那几件事，所以重新提炼时照样逐词核对，
+     *     漏掉的还是由代码补证据句。
+     *   · **锚点用卡片创建时间**，不是现在。新原文里的相对日期（"明天"）
+     *     指的是通知到达那天，与卡片自身的排期口径保持一致。
+     */
+    async previewReExtract(id, input) {
+      assertCardId(id);
+      const existing = repo.get(id);
+      if (!existing) return null;
+
+      const rawText = normalizeRawText(input.rawText);
+      const priority = existing.keywords.priority;
+      const { draft, provider } = await resolveSummarizer().summarize({ rawText, keywords: priority });
+      const checked = enforceKeywords(rawText, draft.keyPoints, priority);
+
+      const anchor = new Date(existing.createdAt);
+      const schedule = parseSchedule(draft.time, {
+        anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,
+      });
+
+      return {
+        rawText,
+        title: draft.title,
+        time: draft.time,
+        source: draft.source,
+        keyPoints: checked.keyPoints,
+        provider,
+        schedule,
+        supplementedKeywords: checked.keywords.missed,
+      };
     },
 
     listRevisions(id) {

@@ -1,7 +1,7 @@
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
-import type { UpdateCardRequest } from '@notification-hub/shared';
+import type { ReExtractPreview, UpdateCardRequest } from '@notification-hub/shared';
 import { CardEditForm } from '../src/components/CardEditForm';
 import { RevisionHistory } from '../src/components/RevisionHistory';
 import type { CardView } from '../src/lib/card-view';
@@ -26,11 +26,34 @@ function makeCard(overrides: Partial<CardView> = {}): CardView {
   };
 }
 
-function setup(card: CardView = makeCard()) {
+/** 重新提炼的替身：默认回一份"官方改了口径"的草稿 */
+function makePreview(overrides: Partial<ReExtractPreview> = {}): ReExtractPreview {
+  return {
+    rawText: '【教务处】选课截止时间推迟到10月22日。',
+    title: '选课截止时间推迟',
+    time: '2026年10月22日',
+    source: '教务处',
+    keyPoints: ['截止时间推迟到10月22日'],
+    provider: 'mock',
+    schedule: {
+      start: '2026-10-22',
+      end: '2026-10-22',
+      dayCount: 1,
+      label: '2026年10月22日',
+      inferredYear: false,
+    },
+    supplementedKeywords: [],
+    ...overrides,
+  };
+}
+
+function setup(card: CardView = makeCard(), onReExtract = vi.fn(async () => makePreview())) {
   const onSubmit = vi.fn(async (_patch: UpdateCardRequest) => true);
   const onCancel = vi.fn();
-  render(<CardEditForm card={card} onSubmit={onSubmit} onCancel={onCancel} />);
-  return { onSubmit, onCancel };
+  render(
+    <CardEditForm card={card} onSubmit={onSubmit} onCancel={onCancel} onReExtract={onReExtract} />,
+  );
+  return { onSubmit, onCancel, onReExtract };
 }
 
 const titleInput = () => screen.getByLabelText('标题') as HTMLInputElement;
@@ -149,12 +172,142 @@ describe('CardEditForm 校验', () => {
 
     expect((onSubmit.mock.calls[0]?.[0] as UpdateCardRequest).keyPoints).toEqual(['要点一']);
   });
+});
+
+describe('CardEditForm 官方改口径：粘贴原文重新提炼', () => {
+  const pasteBox = () => screen.getByLabelText('官方修改后的原文') as HTMLTextAreaElement;
+
+  it('没有粘贴内容时按钮给出提示，不去调接口', async () => {
+    const onReExtract = vi.fn(async () => makePreview());
+    setup(makeCard(), onReExtract);
+
+    await userEvent.click(screen.getByRole('button', { name: '重新提炼' }));
+
+    expect(onReExtract).not.toHaveBeenCalled();
+    expect(screen.getByText('先把官方修改后的原文粘进来')).toBeInTheDocument();
+  });
+
+  it('粘贴后点「重新提炼」，用粘贴的原文去提炼并给出逐项对比', async () => {
+    const onReExtract = vi.fn(async () => makePreview());
+    setup(makeCard(), onReExtract);
+
+    await userEvent.type(pasteBox(), '【教务处】截止时间推迟到10月22日。');
+    await userEvent.click(screen.getByRole('button', { name: '重新提炼' }));
+
+    expect(onReExtract).toHaveBeenCalledWith('【教务处】截止时间推迟到10月22日。');
+    const diff = await screen.findByTestId('re-extract-diff');
+    // 原值与新值都要显示出来，用户才能对比
+    expect(within(diff).getByText('选课开放通知')).toBeInTheDocument();
+    expect(within(diff).getByText('选课截止时间推迟')).toBeInTheDocument();
+    expect(within(diff).getByText('2026年10月22日')).toBeInTheDocument();
+  });
+
+  it('提炼结果不会自动覆盖：不点「采纳」时各字段原样不动', async () => {
+    setup();
+    await userEvent.type(pasteBox(), '官方新原文');
+    await userEvent.click(screen.getByRole('button', { name: '重新提炼' }));
+    await screen.findByTestId('re-extract-diff');
+
+    // 这是这个功能的核心约束：官方改动未必只动时间，用户可能手工订正过要点，
+    // 所以提炼只做"给一份草稿"，覆盖必须由用户逐项确认
+    expect(titleInput()).toHaveValue('选课开放通知');
+    expect(timeInput()).toHaveValue('2026年9月28日');
+  });
+
+  it('点某一项的「采纳」只改那一项', async () => {
+    setup();
+    await userEvent.type(pasteBox(), '官方新原文');
+    await userEvent.click(screen.getByRole('button', { name: '重新提炼' }));
+    const diff = await screen.findByTestId('re-extract-diff');
+
+    // 只采纳"时间"这一行
+    const timeRow = within(diff).getByText('时间').closest('.re-extract__row') as HTMLElement;
+    await userEvent.click(within(timeRow).getByRole('button', { name: '采纳' }));
+
+    expect(timeInput()).toHaveValue('2026年10月22日');
+    // 标题没被一起改掉
+    expect(titleInput()).toHaveValue('选课开放通知');
+  });
+
+  it('「全部采纳」把四项一起换上，并把原文留进补充说明', async () => {
+    const { onSubmit } = setup();
+    await userEvent.type(pasteBox(), '官方新原文');
+    await userEvent.click(screen.getByRole('button', { name: '重新提炼' }));
+    await screen.findByTestId('re-extract-diff');
+
+    await userEvent.click(screen.getByRole('button', { name: '全部采纳' }));
+
+    expect(titleInput()).toHaveValue('选课截止时间推迟');
+    expect(timeInput()).toHaveValue('2026年10月22日');
+    expect(sourceInput()).toHaveValue('教务处');
+    expect(screen.getByLabelText('要点 1')).toHaveValue('截止时间推迟到10月22日');
+    // 日后对账时要知道这轮改的是哪份通知
+    expect(noteInput()).toHaveValue('【教务处】选课截止时间推迟到10月22日。');
+
+    // 采纳只是填进表单，还没提交
+    expect(onSubmit).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole('button', { name: '保存修改' }));
+    expect(onSubmit).toHaveBeenCalledTimes(1);
+  });
+
+  it('识别不出时间时明确说明，而不是留一个空值让人以为改好了', async () => {
+    setup(
+      makeCard(),
+      vi.fn(async () => makePreview({ time: null, schedule: null })),
+    );
+    await userEvent.type(pasteBox(), '官方新原文（没有日期）');
+    await userEvent.click(screen.getByRole('button', { name: '重新提炼' }));
+
+    expect(await screen.findByText('（没识别出时间）')).toBeInTheDocument();
+    expect(screen.getByText(/没识别出日期，这张卡不会进日历/)).toBeInTheDocument();
+  });
+
+  it('提炼出的排期会显示出来，确认前就知道会落到哪天', async () => {
+    setup();
+    await userEvent.type(pasteBox(), '官方新原文');
+    await userEvent.click(screen.getByRole('button', { name: '重新提炼' }));
+
+    expect(await screen.findByText(/排期：10月22日/)).toBeInTheDocument();
+  });
+
+  it('服务端兜底补入的关注点会说明，不让人以为那是模型提炼的', async () => {
+    setup(
+      makeCard(),
+      vi.fn(async () => makePreview({ supplementedKeywords: ['检查时间', '报到地点'] })),
+    );
+    await userEvent.type(pasteBox(), '官方新原文');
+    await userEvent.click(screen.getByRole('button', { name: '重新提炼' }));
+
+    expect(await screen.findByText('替你补了关注的：检查时间、报到地点')).toBeInTheDocument();
+  });
+
+  it('提炼失败时给出错误原因，并保留已填内容', async () => {
+    setup(
+      makeCard(),
+      vi.fn(async () => {
+        throw new Error('无法连接到本地服务，请确认服务端已启动');
+      }),
+    );
+    await userEvent.type(pasteBox(), '官方新原文');
+    await userEvent.click(screen.getByRole('button', { name: '重新提炼' }));
+
+    expect(await screen.findByText('无法连接到本地服务，请确认服务端已启动')).toBeInTheDocument();
+    expect(screen.queryByTestId('re-extract-diff')).toBeNull();
+    expect(titleInput()).toHaveValue('选课开放通知');
+  });
 
   it('提交失败时留在表单里并提示', async () => {
     const card = makeCard();
     const onSubmit = vi.fn(async () => false);
     const onCancel = vi.fn();
-    render(<CardEditForm card={card} onSubmit={onSubmit} onCancel={onCancel} />);
+    render(
+      <CardEditForm
+        card={card}
+        onSubmit={onSubmit}
+        onCancel={onCancel}
+        onReExtract={async () => makePreview()}
+      />,
+    );
 
     await userEvent.click(screen.getByRole('button', { name: '保存修改' }));
 

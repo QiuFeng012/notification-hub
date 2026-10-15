@@ -260,3 +260,37 @@ export interface UpdateSettingsResponse {
   warning: string | null;
 }
 
+/**
+ * 重新提炼的预览结果：官方改了口径，把新原文再提炼一遍，供用户逐项对比。
+ *
+ * **刻意不做成"直接改掉卡片"**：官方修改后的原文未必只改时间，
+ * 也可能改地点、加要求。自动覆盖会把用户手工订正过的要点一起冲掉，
+ * 而"原来写的是什么"在这个场景里往往和"现在是什么"一样重要。
+ * 所以这里只回一份草稿，改不改、改哪几项，由用户在界面上决定。
+ */
+export interface ReExtractPreview {
+  /** 用于重新提炼的原文（用户粘贴的那段） */
+  rawText: string;
+  /** 新提炼出的标题 */
+  title: string;
+  /** 新提炼出的时间文本；识别不出为 null */
+  time: string | null;
+  /** 新提炼出的来源；识别不出为 null */
+  source: string | null;
+  /** 新提炼出的要点 */
+  keyPoints: string[];
+  /** 这次由谁产出：'deepseek' 真实模型 / 'mock' 本地启发式 */
+  provider: SummaryProvider;
+  /**
+   * 从新原文里解析出的排期（解析不出为 null）。
+   * 让用户在确认之前就能看到"这会让卡片落到日历哪一天"，
+   * 而不是保存完再去日历里找。
+   */
+  schedule: CardSchedule | null;
+  /**
+   * 原文里提到了、但新要点一条都没覆盖、由服务端兜底补入的关注点。
+   * 它们是"卡片生成时用户填过的关注点"，重新提炼时同样要保住。
+   */
+  supplementedKeywords: string[];
+}
+

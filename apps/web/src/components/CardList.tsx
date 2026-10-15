@@ -1,4 +1,10 @@
-import { CARD_SORT_LABELS, type CardRevision, type CardSortMode, type UpdateCardRequest } from '@notification-hub/shared';
+import {
+  CARD_SORT_LABELS,
+  type CardRevision,
+  type CardSortMode,
+  type ReExtractPreview,
+  type UpdateCardRequest,
+} from '@notification-hub/shared';
 import { CardItem } from './CardItem';
 import type { CardView } from '../lib/card-view';
 import { CARD_SORT_HINTS } from '../lib/sort';
@@ -8,6 +14,8 @@ interface CardListProps {
   loading: boolean;
   /** 提交修改；返回是否成功 */
   onEdit: (id: string, patch: UpdateCardRequest) => Promise<boolean>;
+  /** 用一段新原文重新提炼，只回草稿；官方改口径时用 */
+  onReExtract: (id: string, rawText: string) => Promise<ReExtractPreview>;
   onLoadRevisions: (id: string) => Promise<CardRevision[]>;
   onClearRevisions: (id: string) => Promise<void>;
   /** 置顶 / 取消置顶 */
@@ -35,6 +43,7 @@ export function CardList({
   cards,
   loading,
   onEdit,
+  onReExtract,
   onLoadRevisions,
   onClearRevisions,
   onTogglePin,
@@ -88,6 +97,7 @@ export function CardList({
             key={card.id}
             card={card}
             onEdit={onEdit}
+            onReExtract={onReExtract}
             onLoadRevisions={onLoadRevisions}
             onClearRevisions={onClearRevisions}
             onTogglePin={onTogglePin}

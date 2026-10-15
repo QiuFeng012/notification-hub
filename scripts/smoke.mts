@@ -69,14 +69,60 @@ async function main(): Promise<void> {
   const unpinned = await api.setPinned(created.id, false);
   check('取消置顶后返回 pinned=false', unpinned.pinned === false);
 
-  console.log('4. 删除信息卡（曾经出过协议问题的路径）');
+  console.log('4. 重新提炼预览：官方改口径用的接口');
+  // 这个接口的协议细节值得真打一次：它是 POST + JSON body，
+  // 而本项目上一次删除功能整条挂掉，正是栽在这类细节上（无 body 的 DELETE 被
+  // 加上 Content-Type 后，Fastify 的 JSON 解析器以 FST_ERR_CTP_EMPTY_JSON_BODY 拒绝）。
+  const badId = await fetch(`${baseUrl}/api/cards/not-a-uuid/re-extract`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rawText: '随便一段原文。' }),
+  });
+  check('id 非法时返回 400', badId.status === 400, `HTTP ${badId.status}`);
+
+  const missing = await fetch(`${baseUrl}/api/cards/99999999-8888-7777-6666-555555555555/re-extract`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rawText: '随便一段原文。' }),
+  });
+  check('卡片不存在时返回 404', missing.status === 404, `HTTP ${missing.status}`);
+
+  const previewResponse = await fetch(`${baseUrl}/api/cards/${created.id}/re-extract`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ rawText: '【教务处】选课截止时间推迟到10月22日，请在此之前完成。' }),
+  });
+  if (previewResponse.status === 200) {
+    const preview = (await previewResponse.json()) as Record<string, unknown>;
+    check('预览返回标题', typeof preview.title === 'string' && preview.title.length > 0);
+    check('预览返回要点数组', Array.isArray(preview.keyPoints));
+    check(
+      '预览带上 provider',
+      preview.provider === 'deepseek' || preview.provider === 'mock',
+      String(preview.provider),
+    );
+    // 新原文里写着 10月22日，排期应当解析出来，供用户在确认前就看到落到哪天
+    const schedule = preview.schedule as { start?: string } | null;
+    check('按新原文解析出了排期', schedule?.start === '2026-10-22', JSON.stringify(schedule));
+    check('预览带回来原文', preview.rawText === '【教务处】选课截止时间推迟到10月22日，请在此之前完成。');
+  } else {
+    // 模型不可用（没配 Key 或网络不通）时是 502，属于"如实告知"而不是协议错误
+    check('模型不可用时返回 502 而不是 500', previewResponse.status === 502, `HTTP ${previewResponse.status}`);
+  }
+
+  // 预览绝不能改动卡片
+  const afterPreview = await api.listCards();
+  const stillThere = afterPreview.find((card) => card.id === created.id);
+  check('预览没有改动卡片', stillThere?.title === created.title && stillThere?.revisionCount === 0);
+
+  console.log('5. 删除信息卡（曾经出过协议问题的路径）');
   await api.deleteCard(created.id);
 
   const afterDelete = await api.listCards();
   check('列表条数恢复', afterDelete.length === before.length, `${afterCreate.length} -> ${afterDelete.length}`);
   check('被删的卡不在列表里', !afterDelete.some((card) => card.id === created.id));
 
-  console.log('5. 删除不存在的卡片应报错');
+  console.log('6. 删除不存在的卡片应报错');
   let errored = false;
   try {
     await api.deleteCard(created.id);
@@ -85,7 +131,7 @@ async function main(): Promise<void> {
   }
   check('重复删除会抛错', errored);
 
-  console.log('6. API 设置接口（只读检查，不改动你的配置）');
+  console.log('7. API 设置接口（只读检查，不改动你的配置）');
   const settingsResponse = await fetch(`${baseUrl}/api/settings`);
   check('GET /api/settings 返回 200', settingsResponse.ok, `HTTP ${settingsResponse.status}`);
   const settingsText = await settingsResponse.text();

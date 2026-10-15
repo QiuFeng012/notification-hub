@@ -127,6 +127,24 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     return reply.code(200).send(updated);
   });
 
+  /**
+   * 官方改了口径：把用户粘贴的新原文重新提炼一遍，只回草稿、不落库。
+   *
+   * 用 POST 而不是 GET：它带一段原文，而且每次调用都会真的调一次模型
+   * （不是幂等读取）。落库仍是 PATCH /api/cards/:id，在用户确认之后才发生。
+   */
+  app.post('/api/cards/:id/re-extract', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { rawText?: unknown };
+    const preview = await options.cardService.previewReExtract(id, { rawText: body.rawText });
+    if (!preview) {
+      return reply
+        .code(404)
+        .send({ error: { code: 'CARD_NOT_FOUND', message: '信息卡不存在或已被删除' } });
+    }
+    return reply.code(200).send(preview);
+  });
+
   // 置顶单独开一个接口：它不改变卡片内容，也就不该要求填写 reason，
   // 更不该计入 revisionCount（改动历史只记录内容变化）。
   app.put('/api/cards/:id/pinned', async (request, reply) => {

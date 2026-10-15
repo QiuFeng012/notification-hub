@@ -202,6 +202,7 @@ export default function App({ api, settingsApi, today }: AppProps = {}) {
                 cards={sortedCards}
                 loading={loading}
                 onEdit={async (id, patch) => (await edit(id, patch)) !== null}
+                onReExtract={cardApi.previewReExtract}
                 onLoadRevisions={revisions}
                 onClearRevisions={clearRevisions}
                 onTogglePin={togglePin}
@@ -218,6 +219,7 @@ export default function App({ api, settingsApi, today }: AppProps = {}) {
                 highlight={highlight}
                 onSaveHighlight={settings.save}
                 onEdit={async (id, patch) => (await edit(id, patch)) !== null}
+                onReExtract={cardApi.previewReExtract}
                 onLoadRevisions={revisions}
                 onClearRevisions={clearRevisions}
                 today={todayIso}

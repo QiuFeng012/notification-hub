@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+﻿import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -75,7 +75,16 @@ function makeApis(
     updateCard: vi.fn(async (id, patch) => makeCard({ id, ...patch })),
     listRevisions: vi.fn(async () => options.revisions ?? []),
     clearRevisions: vi.fn(async () => undefined),
-    setPinned: vi.fn(async (id: string, pinned: boolean) => makeCard({ id, pinned })),
+  previewReExtract: vi.fn(async (_id: string, rawText: string) => ({
+    rawText,
+    title: '官方修改后的标题',
+    time: '2026年10月22日',
+    source: '教务处',
+    keyPoints: ['官方修改后的要点'],
+    provider: 'mock' as const,
+    schedule: { start: '2026-10-22', end: '2026-10-22', dayCount: 1, label: '2026年10月22日', inferredYear: false },
+    supplementedKeywords: [],
+  })),    setPinned: vi.fn(async (id: string, pinned: boolean) => makeCard({ id, pinned })),
     deleteCard: vi.fn(async () => undefined),
   };
   const settingsApi: SettingsApi = {
@@ -396,7 +405,16 @@ describe('未排期与空态', () => {
       updateCard: vi.fn(async (id, patch) => makeCard({ id, ...patch })),
       listRevisions: vi.fn(async () => []),
       clearRevisions: vi.fn(async () => undefined),
-      setPinned: vi.fn(async (id: string, pinned: boolean) => makeCard({ id, pinned })),
+  previewReExtract: vi.fn(async (_id: string, rawText: string) => ({
+    rawText,
+    title: '官方修改后的标题',
+    time: '2026年10月22日',
+    source: '教务处',
+    keyPoints: ['官方修改后的要点'],
+    provider: 'mock' as const,
+    schedule: { start: '2026-10-22', end: '2026-10-22', dayCount: 1, label: '2026年10月22日', inferredYear: false },
+    supplementedKeywords: [],
+  })),      setPinned: vi.fn(async (id: string, pinned: boolean) => makeCard({ id, pinned })),
       deleteCard: vi.fn(async () => undefined),
     };
     window.location.hash = PAGE_HASHES.cards;
