@@ -214,11 +214,6 @@ export function CalendarView({
     const schedule = span.card.schedules[span.scheduleIndex] ?? span.card.schedule;
     const isMulti = (schedule?.dayCount ?? 1) >= 2;
     const roleLabel = SCHEDULE_ROLE_LABELS[schedule?.role ?? 'primary'];
-    // 圆只画在"区间真正开始/结束的那一天"。
-    // 刻意不看列下标：从上周延续过来的段即使落在第 1 列，也不是起点，
-    // 画成圆会让人以为安排从那周的头一天才开始。
-    const showStart = span.startsHere;
-    const showEnd = span.endsHere;
 
     return (
       <button
@@ -229,6 +224,7 @@ export function CalendarView({
         data-card-id={span.card.id}
         data-schedule-index={span.scheduleIndex}
         data-role={schedule?.role ?? 'primary'}
+        data-clipped={span.clipped ? 'true' : 'false'}
         style={{
           gridColumn: `${span.startColumn + 1} / ${span.endColumn + 2}`,
           gridRow: span.lane + 2,
@@ -245,15 +241,15 @@ export function CalendarView({
           )
         }
       >
-        {/* 起始圆：区间从更早的周延续过来时不画，改为平头，示意还没结束 */}
-        <span className={showStart ? 'span__cap span__cap--start' : 'span__edge span__edge--start'} />
-        <span className="span__bar">
-          <span className="span__label">
-            {roleLabel ? <span className="span__role">{roleLabel}</span> : null}
-            {span.card.title}
-          </span>
+        {/* 跑道端头指向的那一天，供读屏理解这条覆盖哪几天 */}
+        <span className="visually-hidden">
+          {schedule?.start === schedule?.end ? schedule?.start : `${schedule?.start} 至 ${schedule?.end}`}
         </span>
-        <span className={showEnd ? 'span__cap span__cap--end' : 'span__edge span__edge--end'} />
+        <span className="span__track" aria-hidden="true" />
+        <span className="span__content">
+          {roleLabel ? <span className="span__role">{roleLabel}</span> : null}
+          <span className="span__label">{span.card.title}</span>
+        </span>
       </button>
     );
   }

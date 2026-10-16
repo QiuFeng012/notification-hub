@@ -273,7 +273,7 @@ describe('圆形日期与周排版', () => {
 });
 
 describe('区间：圆—矩形—圆', () => {
-  it('多日安排渲染成区间，起始与结束各一个圆，中间是矩形', async () => {
+  it('多日安排渲染成一条连续跑道，标题在跑道内', async () => {
     await openCalendar([makeCard({ title: '选课安排', schedule: schedule('2025-03-05', '2025-03-08') })]);
     await screen.findByText('2025 年 3 月');
 
@@ -281,18 +281,23 @@ describe('区间：圆—矩形—圆', () => {
     expect(spans).toHaveLength(1);
     const span = spans[0] as HTMLElement;
     expect(span.className).toContain('span--multi');
-    // 本周内完整区间：两端都是圆（cap），没有平头（edge）
-    expect(span.querySelectorAll('.span__cap')).toHaveLength(2);
-    expect(span.querySelectorAll('.span__edge')).toHaveLength(0);
-    expect(span.querySelector('.span__bar')?.textContent).toBe('选课安排');
+    // 跑道是**一层**底色（不是"圆+矩形+圆"三段拼的），端头圆角由 CSS 给
+    expect(span.querySelectorAll('.span__track')).toHaveLength(1);
+    expect(span.querySelector('.span__content')?.textContent).toBe('选课安排');
+    // 本周内完整覆盖，两侧都不是平头
+    expect(span.getAttribute('data-clipped')).toBe('false');
   });
 
-  it('单日安排只画一个圆，不画矩形', async () => {
+  it('单日安排是一个圆，且不在圆里塞字', async () => {
     await openCalendar([makeCard({ title: '单日安排', schedule: schedule('2025-03-06') })]);
     await screen.findByText('2025 年 3 月');
 
-    const spans = spansInWeek('2025-03-06');
-    expect(spans[0]?.className).toContain('span--single');
+    const span = spansInWeek('2025-03-06')[0] as HTMLElement;
+    expect(span.className).toContain('span--single');
+    // 26px 的圆里放标题只会溢出，标题交给 title 提示与「当天安排」列表
+    expect(span.querySelector('.span__content')).not.toBeNull();
+    // 覆盖日期仍要能被读屏读到
+    expect(span.querySelector('.visually-hidden')?.textContent).toBe('2025-03-06');
   });
 
   it('区间横跨多列，用 gridColumn 表达起止', async () => {
@@ -305,26 +310,20 @@ describe('区间：圆—矩形—圆', () => {
     expect(span.style.gridColumn).toBe('3 / 6');
   });
 
-  it('跨周区间被切成两段，各自用平头示意未结束', async () => {
+  it('跨周区间被切成两段，被截断的那侧标记为平头', async () => {
     // 3 月 6 日（周四）到 3 月 11 日（下周二）跨周
     await openCalendar([makeCard({ id: 'cross', schedule: schedule('2025-03-06', '2025-03-11') })]);
     await screen.findByText('2025 年 3 月');
 
-    // 第一段：03-02~03-08 那一周。起点在本周（左侧有圆），终点在下周（右侧平头）
+    // 第一段：03-03~03-09 那一周。起点在本周（左侧半圆），终点在下周（右侧平头）
     const firstSegment = spanSegment('cross', '2025-03-06') as HTMLElement;
     expect(firstSegment).not.toBeNull();
-    expect(firstSegment.querySelectorAll('.span__cap--start')).toHaveLength(1);
-    expect(firstSegment.querySelectorAll('.span__edge--start')).toHaveLength(0);
-    expect(firstSegment.querySelectorAll('.span__cap--end')).toHaveLength(0);
-    expect(firstSegment.querySelectorAll('.span__edge--end')).toHaveLength(1);
+    expect(firstSegment.getAttribute('data-clipped')).toBe('true');
 
-    // 第二段：03-09~03-15 那一周。起点在上周（左侧平头），终点在本周（右侧有圆）
+    // 第二段：03-10~03-16 那一周。起点在上周（左侧平头），终点在本周（右侧半圆）
     const secondSegment = spanSegment('cross', '2025-03-10') as HTMLElement;
     expect(secondSegment).not.toBeNull();
-    expect(secondSegment.querySelectorAll('.span__edge--start')).toHaveLength(1);
-    expect(secondSegment.querySelectorAll('.span__cap--start')).toHaveLength(0);
-    expect(secondSegment.querySelectorAll('.span__edge--end')).toHaveLength(0);
-    expect(secondSegment.querySelectorAll('.span__cap--end')).toHaveLength(1);
+    expect(secondSegment.getAttribute('data-clipped')).toBe('true');
 
     // 两段颜色一致，读起来才像一条连续的安排
     expect(firstSegment.style.getPropertyValue('--span-color')).toBe(

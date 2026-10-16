@@ -150,8 +150,138 @@ async function measureCalendarAlignment(cdp: {
   `);
 }
 
-const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'notification-hub-ui-'));
-const browser = spawn(
+/**
+ * 日程跑道的端头对齐检查。
+ *
+ * 跑道要看起来"从这天一直连到那天"，端头半圆的圆心就必须落在
+ * **首末两天的日期圆心上**。把长度拆开看（实测标定过）：
+ *
+ *     跑道高 26（半径 13）＝ 日期圆直径
+ *     跑道铺满"首列左边界 → 末列右边界"，而日期圆在列内居中
+ *   ⇒ 圆心距跑道端头 = 半个**列宽** + 13
+ *
+ * 注意是**半个列宽**，不是半个列距：相邻两天的圆心间距含列间距（pitch = 列宽 + gap），
+ * 但列边界之间只差列宽。写成 pitch/2 会算出 60.35 而不是 58.35，
+ * 于是把已经精确对齐的跑道误报成偏 15px（这条检查的第三版就是这么错的）。
+ *
+ * 两条判据各管一件事：
+ *   1. 端头位置 —— 钉住"居中"与"两端对称"；
+ *   2. 跑道宽度 —— 覆盖 n 列必然等于 `(n-1)×pitch + 列宽`。
+ *      它不看圆心，所以"跑道整体被改宽/改窄"一定被它抓到；
+ *      而判据 1 的覆盖集合只能靠"圆心落在端头之内"来认，改窄时首末圆会落到
+ *      外面、认不出来，所以两条都要。
+ *
+ * 列宽与列间距都从周行的 `grid-template-columns` / `column-gap` 读，
+ * 不写死：不同视口下它们都会变（750px 视口是 90.7px，1280px 是 145.7px）。
+ *
+ * 单日圆单独量：必须与日期圆等大同心。
+ *
+ * 容差 1.5px：实测误差在 0.5px 内，而上面那些错法都是 15px 以上。
+ */
+async function measureTrackEndpoints(cdp: {
+  evaluate<T>(expression: string): Promise<T>;
+}): Promise<string[]> {
+  return cdp.evaluate<string[]>(`
+    (() => {
+      const problems = [];
+      const box = (el) => {
+        const r = el.getBoundingClientRect();
+        return { left: r.left, right: r.right, x: r.left + r.width / 2, width: r.width };
+      };
+
+      /** 列距 = 列宽 + 列间距；同时把列宽单独返回，供宽度校验用 */
+      const metricsOf = (week) => {
+        const style = getComputedStyle(week);
+        const widths = style.gridTemplateColumns
+          .split(' ')
+          .map((value) => Number.parseFloat(value))
+          .filter((value) => Number.isFinite(value) && value > 0);
+        if (widths.length < 2) return null;
+        const gap = Number.parseFloat(style.columnGap || '0');
+        const column = widths.reduce((sum, value) => sum + value, 0) / widths.length;
+        if (!(column > 0)) return null;
+        const gapValue = Number.isFinite(gap) ? gap : 0;
+        return { column, gap: gapValue, pitch: column + gapValue };
+      };
+
+      const RADIUS = 13;
+
+      for (const span of document.querySelectorAll('[data-testid="calendar-span"].span--multi')) {
+        const track = span.querySelector('.span__track');
+        if (!track) { problems.push('日程缺少跑道底色层'); continue; }
+        const t = box(track);
+        const week = span.closest('[data-testid="calendar-week"]');
+        const metrics = week ? metricsOf(week) : null;
+        if (!week || !metrics) continue;
+        const { column, gap, pitch } = metrics;
+
+        /**
+         * "覆盖的日期"只能看出**包含关系**，所以判据收到圆心落在端头之内。
+         *
+         * 这里放宽过一次，想让"跑道被改窄、首末圆落到跑道外"也能被检到，
+         * 结果把旁边一天的圆也算了进来，误报 109px（实测）。
+         * 改窄的缺陷由下面的宽度校验兜住——那条不需要知道覆盖哪几天。
+         */
+        const inside = [...week.querySelectorAll('.day-circle')]
+          .map(box)
+          .filter((c) => c.x >= t.left && c.x <= t.right);
+        if (inside.length < 2) continue;
+
+        const expectedLeft = inside[0].x - column / 2;
+        const expectedRight = inside[inside.length - 1].x + column / 2;
+
+        /*
+         * 关系一：端头落在首列/末列的列边界上（圆心 ∓ 半列宽），
+         * 而日期圆在列内居中，于是端头半圆的圆心正好套住那个圆。
+         * 这条同时钉住了"跑道居中"与"两端对称"。
+         */
+        if (Math.abs(t.left - expectedLeft) > 1.5) {
+          problems.push(
+            '跑道左端偏离首日圆心 ' + (t.left - expectedLeft).toFixed(1) + 'px（实测端头 ' + t.left.toFixed(1) + '，应为 ' + expectedLeft.toFixed(1) + '）',
+          );
+        }
+        if (Math.abs(t.right - expectedRight) > 1.5) {
+          problems.push(
+            '跑道右端偏离末日圆心 ' + (t.right - expectedRight).toFixed(1) + 'px（实测端头 ' + t.right.toFixed(1) + '，应为 ' + expectedRight.toFixed(1) + '）',
+          );
+        }
+
+        /*
+         * 关系二（独立校验）：覆盖 n 列时，宽度必然等于 (n-1)×列距 + 列宽。
+         * 这条不看圆心，所以"跑道被改窄/加宽"一定被它抓到——
+         * 正是上面那条判据因为误报而收窄后失去的能力。
+         */
+        const expectedWidth = (inside.length - 1) * pitch + column;
+        if (Math.abs(t.width - expectedWidth) > 1.5) {
+          problems.push(
+            '跑道宽度 ' + t.width.toFixed(1) + 'px，覆盖 ' + inside.length + ' 天应为 ' + expectedWidth.toFixed(1) + 'px（列宽 ' + column.toFixed(1) + '、列距 ' + pitch.toFixed(1) + '、间距 ' + gap.toFixed(1) + '）',
+          );
+        }
+      }
+
+      // 单日圆：必须与日期圆同宽、同心
+      for (const span of document.querySelectorAll('[data-testid="calendar-span"].span--single')) {
+        const track = span.querySelector('.span__track');
+        const date = span.querySelector('.visually-hidden')?.textContent;
+        if (!track || !date) continue;
+        const day = span.closest('[data-testid="calendar-week"]')?.querySelector('[data-date="' + date + '"]');
+        if (!day) continue;
+        const t = box(track);
+        const d = box(day);
+        if (Math.abs(t.width - d.width) > 1) {
+          problems.push('单日圆的直径与日期圆不同：' + t.width.toFixed(1) + ' vs ' + d.width.toFixed(1));
+        }
+        if (Math.abs(t.x - d.x) > 1.5) {
+          problems.push('单日圆与日期圆不同心，偏 ' + (t.x - d.x).toFixed(2) + 'px');
+        }
+      }
+
+      return problems;
+    })()
+  `);
+}
+
+const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'notification-hub-ui-'));const browser = spawn(
   browserPath,
   [
     '--headless=new',
@@ -332,6 +462,10 @@ async function main(): Promise<void> {
 
   const aligned = await measureCalendarAlignment(cdp);
   check('本月各列与星期表头对齐', aligned.length === 0, aligned.join('；'));
+
+  // 日程跑道的端头必须落在首末两天的日期圆心上（几何由 CSS 的 calc 撑起来）
+  const trackProblems = await measureTrackEndpoints(cdp);
+  check('日程跑道两端与首末日期圆同心', trackProblems.length === 0, trackProblems.join('；'));
 
   // 日历的写法（用户确定的规格）：
   //   · 表头按「一 二 三 四 五 六 日」，周一最前、周日最后

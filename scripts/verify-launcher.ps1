@@ -199,6 +199,19 @@ if (Test-Path $stylesPath) {
     ($styles -match '(?s)\.calendar__week\s*\{[^}]*outline:\s*1px solid')
   Check "日历区间在栅格列里居中（否则单日圆会落在两列之间）" `
     ($styles -match '(?s)\.span\s*\{[^}]*justify-self:\s*center')
+  # 跑道形状的几何：日期圆直径 26px（半径 13），圆心距列边 13px，
+  # 于是"栅格区"正好比"首末两天的日期圆心"宽 26px——跑道铺满栅格区，
+  # 端头半圆的圆心就落在首末两天的圆心上。
+  #
+  # 这里刻意断言 `.span` 用的是 `width: 100%` 而不是 `calc(100% + 26px)`：
+  # 后者会让百分比按"栅格区 + 26px"解析，再叠外扩就多出半列，
+  # 端头跑到日期圆外面（实测偏 72.9px），verify:ui 会当场报出来。
+  Check "日程跑道铺满栅格区（宽度不加外扩）" `
+    ($styles -match '(?s)\.span\s*\{[^}]*width:\s*100%')
+  Check "跑道底色层左右不外扩（inset: 0）" `
+    ($styles -match '(?s)\.span__track\s*\{[^}]*inset:\s*0;')
+  Check "单日日程收成与日期圆等大的圆" `
+    ($styles -match '(?s)\.span--single\s*\{[^}]*width:\s*26px')
 }
 
 # 真正执行每个脚本。语法解析查不出参数默认值这类运行时错误：
