@@ -11,6 +11,7 @@ import {
   normalizeKeywords,
   type CardKeywords,
   type CardRevision,
+  type CardSchedule,
   type InfoCard,
   type ReExtractPreview,
 } from '@notification-hub/shared';
@@ -18,7 +19,7 @@ import type { Summarizer } from '../ai/types.js';
 import type { SummarizerProvider } from '../ai/provider.js';
 import type { CardRepository } from '../db/repository.js';
 import { enforceKeywords } from '../keywords/keyword-check.js';
-import { parseSchedule } from '../calendar/date-parser.js';
+import { buildSchedules, parseSchedule } from '../calendar/date-parser.js';
 
 /** 业务规则被违反时抛出，由 HTTP 层映射成 4xx */
 export class ValidationError extends Error {
@@ -69,9 +70,32 @@ function assertCardId(id: string): void {
   }
 }
 
+/**
+ * 算出这张卡在日历上的全部日程。
+ *
+ * 顺序很重要：**先从原文拆分**，再退回 time 文本。
+ * 一条通知常常同时写"9月23日12:30开始报名"与"9月24日15:00活动举行"，
+ * 而 time 字段只装得下其中一个——只看 time 会把另一件事从日历上丢掉。
+ *
+ * time 文本仍然有用：它告诉拆分器"哪一件是主日程"（模型已经提炼过，
+ * 通常就是这张卡最相关的时间）。两个都解析不出时返回空数组，
+ * 表示"排不上日历"——这与"猜一个日期"是两回事。
+ */
+function resolveSchedules(
+  rawText: string,
+  timeText: string | null,
+  anchor: Date,
+): CardSchedule[] {
+  const options = { anchor, timeText };
+  const fromRaw = buildSchedules(rawText, options);
+  if (fromRaw.length > 0) return fromRaw;
+
+  const single = parseSchedule(timeText, options);
+  return single ? [single] : [];
+}
+
 /** 可空的文本字段：允许显式传 null 表示清空 */
-function normalizeOptionalText(
-  value: unknown,
+function normalizeOptionalText(  value: unknown,
   field: string,
   max: number,
 ): string | null {
@@ -227,9 +251,11 @@ export function createCardService(
       const keywords: CardKeywords = checked.keywords;
 
       const createdAt = now();
-      // 日历排期从模型给出的时间文本解析。解析不出就是 null——
+      // 日历排期从**原文**拆分：一条通知可能同时有"报名截止"与"活动开始"两个时间，
+      // 只看 time 文本会漏掉其中一个（time 只装得下最相关的那一个）。
+      // 拆不出来时退回 time 文本的单条；都解析不出就是空——
       // 排不上日历比排错位置安全，界面上会明确说明这张卡没有日期。
-      const schedule = parseSchedule(draft.time, { anchor: createdAt });
+      const schedules = resolveSchedules(rawText, draft.time, createdAt);
 
       const card: InfoCard = {
         id: randomUUID(),
@@ -238,7 +264,8 @@ export function createCardService(
         source: draft.source,
         keyPoints: checked.keyPoints,
         rawText,
-        schedule,
+        schedule: schedules[0] ?? null,
+        schedules,
         keywords,
         provider,
         createdAt: createdAt.toISOString(),
@@ -262,7 +289,21 @@ export function createCardService(
     updateCard(id, input) {
       assertCardId(id);
       const { patch, reason, note } = normalizeCardPatch(input);
-      return repo.update(id, patch, reason, note);
+      const existing = repo.get(id);
+      if (!existing) return null;
+
+      // 时间文本可能被改过，也可能没改（官方只改了措辞）。
+      // 无论哪种都重算一遍日程：一条通知里的"报名截止"与"活动"要拆成多条，
+      // 这件事与"时间变没变"无关。锚点仍用卡片创建时间。
+      const anchor = new Date(existing.createdAt);
+      const nextTime = patch.time !== undefined ? patch.time : existing.time;
+      const schedules = resolveSchedules(
+        existing.rawText,
+        nextTime,
+        Number.isNaN(anchor.getTime()) ? new Date() : anchor,
+      );
+
+      return repo.update(id, { ...patch, schedules }, reason, note);
     },
 
     /**
@@ -288,9 +329,11 @@ export function createCardService(
       const checked = enforceKeywords(rawText, draft.keyPoints, priority);
 
       const anchor = new Date(existing.createdAt);
-      const schedule = parseSchedule(draft.time, {
-        anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,
-      });
+      const schedules = resolveSchedules(
+        rawText,
+        draft.time,
+        Number.isNaN(anchor.getTime()) ? new Date() : anchor,
+      );
 
       return {
         rawText,
@@ -299,7 +342,8 @@ export function createCardService(
         source: draft.source,
         keyPoints: checked.keyPoints,
         provider,
-        schedule,
+        schedule: schedules[0] ?? null,
+        schedules,
         supplementedKeywords: checked.keywords.missed,
       };
     },

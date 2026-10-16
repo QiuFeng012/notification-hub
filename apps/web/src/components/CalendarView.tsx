@@ -3,6 +3,7 @@ import type {
   CardRevision,
   HighlightStyle,
   ReExtractPreview,
+  ScheduleRole,
   UpdateCardRequest,
   UpdateSettingsRequest,
 } from '@notification-hub/shared';
@@ -25,6 +26,22 @@ import {
 
 // 周一在最左、周日在最右：这是用户确定的写法（一二三四五六日）
 const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
+
+/**
+ * 日程角色的中文标签。
+ *
+ * 一条通知常常同时给"报名截止"和"活动开始"两个时间，日历上会画两条。
+ * 两条颜色相同、日期相邻，没有标签就分不清哪条是哪个——
+ * 而"哪天之前要交"和"哪天要去"是完全不同的两件事。
+ *
+ * primary 不带标签：绝大多数通知只有一个时间，给它加个"主要"反而添乱。
+ */
+const SCHEDULE_ROLE_LABELS: Record<ScheduleRole, string | null> = {
+  deadline: '报名截止',
+  activity: '活动',
+  visit: '到场',
+  primary: null,
+};
 
 /**
  * 常用的起始色，仅作为"快捷起点"。
@@ -192,7 +209,11 @@ export function CalendarView({
 
   function renderSpan(span: ScheduleSpan<CardView>, week: CalendarWeek<CardView>) {
     const color = resolveCardColor(span.card, styleForRender);
-    const isMulti = (span.card.schedule?.dayCount ?? 1) >= 2;
+    // 每条区间对应卡片上的第几条日程。一条通知可能同时有"报名截止"与"活动"，
+    // 两条都画出来、各自带标签，才分得清哪个是哪个。
+    const schedule = span.card.schedules[span.scheduleIndex] ?? span.card.schedule;
+    const isMulti = (schedule?.dayCount ?? 1) >= 2;
+    const roleLabel = SCHEDULE_ROLE_LABELS[schedule?.role ?? 'primary'];
     // 圆只画在"区间真正开始/结束的那一天"。
     // 刻意不看列下标：从上周延续过来的段即使落在第 1 列，也不是起点，
     // 画成圆会让人以为安排从那周的头一天才开始。
@@ -201,11 +222,13 @@ export function CalendarView({
 
     return (
       <button
-        key={`${week.days[0]?.date ?? 'w'}-${span.card.id}`}
+        key={`${week.days[0]?.date ?? 'w'}-${span.card.id}-${span.scheduleIndex}`}
         type="button"
         className={isMulti ? 'span span--multi' : 'span span--single'}
         data-testid="calendar-span"
         data-card-id={span.card.id}
+        data-schedule-index={span.scheduleIndex}
+        data-role={schedule?.role ?? 'primary'}
         style={{
           gridColumn: `${span.startColumn + 1} / ${span.endColumn + 2}`,
           gridRow: span.lane + 2,
@@ -214,18 +237,21 @@ export function CalendarView({
           // （浅色主题下"浅色块用深字"，深色主题下那个深字会糊在暗背景上）
           ['--span-ink' as string]: readableTextColor(color, 'var(--span-ink-dark)', 'var(--span-ink-light)'),
         }}
-        title={`${span.card.title}（${span.card.schedule?.label ?? ''}）`}
+        title={`${span.card.title}${roleLabel ? `（${roleLabel}）` : ''}：${schedule?.label ?? ''}`}
         onClick={() =>
           setSelectedDate(
             // 点区间时优先跳到区间的起始日；跨周延续过来的段则落在本周第一天
-            span.startsHere ? (span.card.schedule?.start ?? null) : (week.days[0]?.date ?? null),
+            span.startsHere ? (schedule?.start ?? null) : (week.days[0]?.date ?? null),
           )
         }
       >
         {/* 起始圆：区间从更早的周延续过来时不画，改为平头，示意还没结束 */}
         <span className={showStart ? 'span__cap span__cap--start' : 'span__edge span__edge--start'} />
         <span className="span__bar">
-          <span className="span__label">{span.card.title}</span>
+          <span className="span__label">
+            {roleLabel ? <span className="span__role">{roleLabel}</span> : null}
+            {span.card.title}
+          </span>
         </span>
         <span className={showEnd ? 'span__cap span__cap--end' : 'span__edge span__edge--end'} />
       </button>

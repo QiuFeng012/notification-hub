@@ -32,6 +32,9 @@ function makeCard(overrides: Partial<InfoCard> = {}): InfoCard {
     keyPoints: ['检查时间待定'],
     rawText: '原通知：检查时间另行通知。',
     schedule: { start: '2026-10-15', end: '2026-10-15', dayCount: 1, label: '10月15日', inferredYear: true },
+    schedules: [
+      { start: '2026-10-15', end: '2026-10-15', dayCount: 1, label: '10月15日', inferredYear: true },
+    ],
     keywords: { priority: ['检查时间'], hit: [], missed: [] },
     provider: 'mock',
     createdAt: NOW.toISOString(),

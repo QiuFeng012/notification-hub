@@ -13,6 +13,11 @@ export interface CardView {
   rawText: string;
   /** 日历排期；服务端解析不出日期时为 null，日历上不显示这张卡 */
   schedule: CardSchedule | null;
+  /**
+   * 这张卡在日历上的**全部**日程（一条通知可能同时有"报名截止"与"活动"）。
+   * 日历按它逐条画，列表与排序仍只看主日程那一项。
+   */
+  schedules: CardSchedule[];
   /** 生成时的关注点记录，用于在卡片上标出"含你关注的" */
   keywords: CardKeywords;
   provider: InfoCard['provider'];
@@ -44,6 +49,14 @@ export function toCardView(input: unknown): CardView | null {
     ? card.keyPoints.filter((point): point is string => typeof point === 'string' && point.trim().length > 0)
     : [];
 
+  // schedules 是权威来源；老数据没有它时用 schedule 兜底成单条，
+  // 保证界面在两种数据形态下都能正常画日历
+  const schedules = Array.isArray(card.schedules)
+    ? card.schedules.map((item) => toSchedule(item)).filter((item): item is CardSchedule => item !== null)
+    : [];
+  const primary = toSchedule(card.schedule);
+  const resolvedSchedules = schedules.length > 0 ? schedules : primary ? [primary] : [];
+
   return {
     id: card.id,
     title: nonEmptyString(card.title) ?? '未命名通知',
@@ -51,7 +64,9 @@ export function toCardView(input: unknown): CardView | null {
     source: nonEmptyString(card.source),
     keyPoints,
     rawText: typeof card.rawText === 'string' ? card.rawText : '',
-    schedule: toSchedule(card.schedule),
+    // 主日程由 schedules 派生，与服务端同一口径
+    schedule: resolvedSchedules[0] ?? null,
+    schedules: resolvedSchedules,
     keywords: toKeywords(card.keywords),
     provider: card.provider === 'deepseek' ? 'deepseek' : 'mock',
     createdAt: typeof card.createdAt === 'string' ? card.createdAt : '',
@@ -104,7 +119,13 @@ function toSchedule(input: unknown): CardSchedule | null {
     dayCount: typeof record.dayCount === 'number' && record.dayCount > 0 ? record.dayCount : 1,
     label: typeof record.label === 'string' ? record.label : '',
     inferredYear: record.inferredYear === true,
+    ...(isScheduleRole(record.role) ? { role: record.role } : {}),
   };
+}
+
+/** 角色取值校验：坏数据当作没有角色，而不是把任意字符串当标签用 */
+function isScheduleRole(value: unknown): value is NonNullable<CardSchedule['role']> {
+  return value === 'deadline' || value === 'activity' || value === 'visit' || value === 'primary';
 }
 
 /** 关键词记录的归一化：缺失或损坏都退回空记录（老卡片没有这个字段） */

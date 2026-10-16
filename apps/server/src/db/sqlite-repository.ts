@@ -1,9 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { CardKeywords, CardRevision, CardSchedule, InfoCard, SummaryProvider } from '@notification-hub/shared';
+import type {
+  CardKeywords,
+  CardRevision,
+  CardSchedule,
+  InfoCard,
+  ScheduleRole,
+  SummaryProvider,
+} from '@notification-hub/shared';
 import { DEFAULT_LIST_LIMIT, type CardRepository } from './repository.js';
-import { parseSchedule } from '../calendar/date-parser.js';
+import { buildSchedules, parseSchedule } from '../calendar/date-parser.js';
 
 /**
  * seq 是单调递增的插入序号，仅用于排序。
@@ -11,8 +18,12 @@ import { parseSchedule } from '../calendar/date-parser.js';
  * 只按 created_at 排序时顺序不确定（SQLite 可能按主键回退），
  * 因此用 (created_at DESC, seq DESC) 两级排序，保证"最新的排最前"是确定的。
  *
- * keywords 与 schedule 以 JSON 字符串存储：前者记录生成时的关注点，
- * 后者是从 time 文本确定性解析出的日历排期（解析不出为 NULL）。
+ * keywords / schedule / schedules 都以 JSON 字符串存储：keywords 记录生成时的关注点，
+ * schedule 是这张卡在日历上的**主日程**（解析不出为 NULL），
+ * schedules 是它的**全部**日程——一条通知可能同时有"报名截止"与"活动开始"两个时间。
+ *
+ * schedule 保留下来，是因为排序、列表徽标、过期判断都只需要主日程；
+ * 它由 schedules 派生（schedules[0] ?? null），避免两处各写一份导致不一致。
  */
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS cards (
@@ -27,6 +38,7 @@ CREATE TABLE IF NOT EXISTS cards (
   seq            INTEGER NOT NULL DEFAULT 0,
   keywords       TEXT NOT NULL DEFAULT '{}',
   schedule       TEXT,
+  schedules      TEXT,
   updated_at     TEXT,
   revision_count INTEGER NOT NULL DEFAULT 0,
   pinned         INTEGER NOT NULL DEFAULT 0
@@ -49,7 +61,7 @@ CREATE TABLE IF NOT EXISTS card_revisions (
 CREATE INDEX IF NOT EXISTS idx_revisions_card ON card_revisions (card_id, id DESC);
 `;
 
-/** 数据库里的一行；key_points / keywords / schedule 以 JSON 字符串存储 */
+/** 数据库里的一行；key_points / keywords / schedule / schedules 以 JSON 字符串存储 */
 interface CardRow {
   id: string;
   title: string;
@@ -61,6 +73,7 @@ interface CardRow {
   created_at: string;
   keywords?: string | null;
   schedule?: string | null;
+  schedules?: string | null;
   updated_at?: string | null;
   revision_count?: number | null;
   pinned?: number | null;
@@ -128,13 +141,41 @@ function parseStoredSchedule(raw: string | null | undefined): CardSchedule | nul
       dayCount: typeof record.dayCount === 'number' ? record.dayCount : 1,
       label: typeof record.label === 'string' ? record.label : '',
       inferredYear: record.inferredYear === true,
+      ...(isScheduleRole(record.role) ? { role: record.role } : {}),
     };
   } catch {
     return null;
   }
 }
 
+/** 角色取值校验：坏数据当作没有角色，而不是把它塞进界面当标签 */
+function isScheduleRole(value: unknown): value is ScheduleRole {
+  return value === 'deadline' || value === 'activity' || value === 'visit' || value === 'primary';
+}
+
+/**
+ * 解析 schedules 数组。缺失（老数据）或损坏时退回空数组——
+ * 调用方会拿 schedule 那一列兜底，所以老卡片不会因此从日历上消失。
+ */
+function parseStoredSchedules(raw: string | null | undefined): CardSchedule[] {
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => parseStoredSchedule(JSON.stringify(item)))
+      .filter((item): item is CardSchedule => item !== null);
+  } catch {
+    return [];
+  }
+}
+
 function rowToCard(row: CardRow): InfoCard {
+  const storedSchedules = parseStoredSchedules(row.schedules);
+  const primary = parseStoredSchedule(row.schedule);
+  // schedules 是权威来源；老数据没有这一列时用 schedule 兜底成单条，
+  // 两者都没有就是"排不上日历"
+  const schedules = storedSchedules.length > 0 ? storedSchedules : primary ? [primary] : [];
   return {
     id: row.id,
     title: row.title,
@@ -142,7 +183,9 @@ function rowToCard(row: CardRow): InfoCard {
     source: row.source,
     keyPoints: parseKeyPoints(row.key_points),
     rawText: row.raw_text,
-    schedule: parseStoredSchedule(row.schedule),
+    // schedule 由 schedules 派生，保证两者永远一致
+    schedule: schedules[0] ?? null,
+    schedules,
     keywords: parseKeywords(row.keywords),
     provider: toProvider(row.provider),
     createdAt: row.created_at,
@@ -180,8 +223,10 @@ function rowToRevision(row: RevisionRow): CardRevision {
  * 1：初版
  * 2：修掉「10月22号」里的日期读不出来、退化成"本周周四"的缺陷
  *    （示例：10月22号（第八周周四）被排到了 10-15）
+ * 3：把一条通知里的"报名截止"与"活动"拆成多条日程（schedules 列）
+ *    （示例：9月23日报名截止 + 9月24日活动，原先被合成 9-23~9-24 一个区间）
  */
-const SCHEDULE_VERSION = 2;
+const SCHEDULE_VERSION = 3;
 
 /**
  * 轻量迁移：给老数据库补上没有的列。
@@ -205,6 +250,11 @@ function migrate(db: DatabaseSync): void {
   if (!has('schedule')) {
     // 可空：老卡片没有排期，解析不出来时也是 NULL
     db.exec(`ALTER TABLE cards ADD COLUMN schedule TEXT`);
+  }
+  if (!has('schedules')) {
+    // 可空：这一列是"全部日程"。老数据没有它，读的时候会用 schedule 兜底成单条，
+    // 然后由下面的版本号触发重算补上
+    db.exec(`ALTER TABLE cards ADD COLUMN schedules TEXT`);
   }
   if (!has('schedule_computed')) {
     // 已有 schedule 的都是新数据（算过），老数据默认为 0 等着回填
@@ -248,14 +298,14 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
   // 单用户本地应用 + node:sqlite 同步 API，不存在并发插入，MAX(seq)+1 是安全的
   const nextSeqStmt = db.prepare(`SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM cards`);
   const insertStmt = db.prepare(
-    `INSERT INTO cards (id, title, time, source, key_points, raw_text, provider, created_at, seq, keywords, schedule, schedule_computed, schedule_version, pinned)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
+    `INSERT INTO cards (id, title, time, source, key_points, raw_text, provider, created_at, seq, keywords, schedule, schedules, schedule_computed, schedule_version, pinned)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)`,
   );
   const setPinnedStmt = db.prepare(`UPDATE cards SET pinned = ? WHERE id = ?`);
   const deleteStmt = db.prepare(`DELETE FROM cards WHERE id = ?`);
   const updateStmt = db.prepare(
     `UPDATE cards
-        SET title = ?, time = ?, source = ?, key_points = ?, schedule = ?,
+        SET title = ?, time = ?, source = ?, key_points = ?, schedule = ?, schedules = ?,
             schedule_computed = 1, schedule_version = ?,
             updated_at = ?, revision_count = revision_count + 1
       WHERE id = ?`,
@@ -284,24 +334,39 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
    * 会被按今天重新解释，把历史排期算到错误的日子上。
    * 解析不出来也标记为"按当前版本算过了"，避免每次启动重复劳动。
    *
-   * 只动 schedule 与 schedule_version：不碰 updated_at、revision_count，
+   * 只动 schedule / schedules 与 schedule_version：不碰 updated_at、revision_count，
    * 也不写改动历史——重算不是用户做的修改，不该在卡片上留下"已修改 N 次"。
    */
   function backfillSchedules(): void {
     const pending = db
-      .prepare(`SELECT id, time, created_at FROM cards WHERE schedule_version < ?`)
-      .all(SCHEDULE_VERSION) as unknown as Array<{ id: string; time: string | null; created_at: string }>;
+      .prepare(`SELECT id, time, raw_text, created_at FROM cards WHERE schedule_version < ?`)
+      .all(SCHEDULE_VERSION) as unknown as Array<{
+      id: string;
+      time: string | null;
+      raw_text: string;
+      created_at: string;
+    }>;
     if (pending.length === 0) return;
 
     const update = db.prepare(
-      `UPDATE cards SET schedule = ?, schedule_computed = 1, schedule_version = ? WHERE id = ?`,
+      `UPDATE cards SET schedule = ?, schedules = ?, schedule_computed = 1, schedule_version = ? WHERE id = ?`,
     );
     for (const row of pending) {
       const anchor = new Date(row.created_at);
-      const schedule = parseSchedule(row.time, {
+      const options = {
         anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,
-      });
-      update.run(schedule ? JSON.stringify(schedule) : null, SCHEDULE_VERSION, row.id);
+        timeText: row.time,
+      };
+      // 从原文拆分（可能得到多条），解析不出来时退回 time 文本的单条
+      const schedules = buildSchedules(row.raw_text, options);
+      const fallback = schedules.length === 0 ? parseSchedule(row.time, options) : null;
+      const all = schedules.length > 0 ? schedules : fallback ? [fallback] : [];
+      update.run(
+        all[0] ? JSON.stringify(all[0]) : null,
+        all.length > 0 ? JSON.stringify(all) : null,
+        SCHEDULE_VERSION,
+        row.id,
+      );
     }
   }
 
@@ -338,6 +403,7 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
         Number(next),
         JSON.stringify(card.keywords),
         card.schedule ? JSON.stringify(card.schedule) : null,
+        card.schedules.length > 0 ? JSON.stringify(card.schedules) : null,
         SCHEDULE_VERSION,
         card.pinned ? 1 : 0,
       );
@@ -355,18 +421,26 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
 
       // 排期**每次都重算**，不只在时间文本变化时算。
       //
-      // 两个理由：
-      //   1. 它本来就是"当前时间文本的确定性函数"，重复算结果一致，不引入不确定性；
+      // 三个理由：
+      //   1. 它本来就是"当前时间文本与原文的确定性函数"，重复算结果一致；
       //   2. 只认"时间变了"会漏掉一类真实情况——用户这轮只改了标题或要点，
-      //      但时间文本其实早就该重新解析了（比如解析规则本身修过、
-      //      或上一次保存时文本恰好没能解析出来）。那时排期会一直停在旧的错值上，
-      //      而用户在界面上改的明明是别的东西，根本不会想到日历要跟着动。
+      //      但排期其实早就该重新解析了（比如解析规则本身修过）。
+      //      那时排期会一直停在旧值上，而用户改的明明是别的东西；
+      //   3. 一条通知里的"报名截止"与"活动"要拆成多条，这同样与"时间变没变"无关。
       //
       // 锚点仍用卡片创建时间：相对日期（"明天"）指的是通知到达那天，不是改动的这天。
       const anchor = new Date(existing.createdAt);
-      const nextSchedule = parseSchedule(nextTime, {
+      const options = {
         anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,
-      });
+        timeText: nextTime,
+      };
+      // 优先用调用方算好的（服务端装配时已经算过一次，不必重复劳动）；
+      // 没给就按当前时间文本与原文现算。
+      const fromRaw = patch.schedules ?? buildSchedules(existing.rawText, options);
+      const nextSchedules = fromRaw.length > 0 ? fromRaw : (() => {
+        const single = parseSchedule(nextTime, options);
+        return single ? [single] : [];
+      })();
 
       const now = new Date().toISOString();
 
@@ -387,7 +461,8 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
         nextTime,
         nextSource,
         JSON.stringify(nextKeyPoints),
-        nextSchedule ? JSON.stringify(nextSchedule) : null,
+        nextSchedules[0] ? JSON.stringify(nextSchedules[0]) : null,
+        nextSchedules.length > 0 ? JSON.stringify(nextSchedules) : null,
         SCHEDULE_VERSION,
         now,
         id,
@@ -486,6 +561,16 @@ export function createMemoryCardRepository(): CardRepository {
 
       const nextTime = patch.time !== undefined ? patch.time : existing.time;
       const anchor = new Date(existing.createdAt);
+      const options = {
+        anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,
+        timeText: nextTime,
+      };
+      // 与 sqlite 版同样的口径：每次都重算、优先用调用方算好的、退回 time 单条
+      const fromRaw = patch.schedules ?? buildSchedules(existing.rawText, options);
+      const nextSchedules = fromRaw.length > 0 ? fromRaw : (() => {
+        const single = parseSchedule(nextTime, options);
+        return single ? [single] : [];
+      })();
 
       const updated: InfoCard = {
         ...existing,
@@ -493,9 +578,8 @@ export function createMemoryCardRepository(): CardRepository {
         time: nextTime,
         source: patch.source !== undefined ? patch.source : existing.source,
         keyPoints: patch.keyPoints ?? existing.keyPoints,
-        schedule: parseSchedule(nextTime, {
-          anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,
-        }),
+        schedule: nextSchedules[0] ?? null,
+        schedules: nextSchedules,
         updatedAt: now,
         revisionCount: existing.revisionCount + 1,
       };

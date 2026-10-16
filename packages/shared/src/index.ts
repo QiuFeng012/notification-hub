@@ -9,6 +9,7 @@ export type {
   CardSortMode,
   HighlightStyle,
   RevisionReason,
+  ScheduleRole,
   UpdateCardRequest,
 } from './calendar.js';
 
@@ -104,10 +105,24 @@ export interface InfoCard {
   /** 原始通知原文，一并存档，便于核对 AI 是否漏信息 */
   rawText: string;
   /**
-   * 日历排期。服务端从 time 文本确定性解析得来；
+   * 日历排期。服务端从 time 与原文确定性解析得来；
    * 解析不出则为 null，日历上不显示这张卡，而不是猜一个日期放上去。
+   *
+   * 它始终等于 schedules[0] 或 null（schedules 空 → 这里也是 null）。
+   * 保留这个字段是因为排序、列表徽标、过期判断都只需要"这张卡最主要的那个时间"，
+   * 让它们不必关心多日程的细节。
    */
   schedule: CardSchedule | null;
+  /**
+   * 这张卡在日历上的**全部**日程。
+   *
+   * 一条通知可能同时给两个时间——"9月23日12:30开始报名"与"9月24日15:00活动举行"。
+   * 它们不是一段区间，硬合成一个区间会把日历画错（截止日与活动日被涂成连续一片），
+   * 所以分成多条各自带角色标签。绝大多数通知只有一条。
+   *
+   * 空数组 = 排不上日历（与 schedule 为 null 同义）。
+   */
+  schedules: CardSchedule[];
   /**
    * 生成时的关注点记录。存的是"我当时在关注什么"，不是长期配置，
    * 所以日后回看能知道这条卡为什么是现在这个样子。
@@ -287,6 +302,11 @@ export interface ReExtractPreview {
    * 而不是保存完再去日历里找。
    */
   schedule: CardSchedule | null;
+  /**
+   * 新原文里解析出的全部日程。官方改口径时常常是"报名截止推迟"而活动照旧，
+   * 拆开列出才能看出到底动的是哪一个。
+   */
+  schedules: CardSchedule[];
   /**
    * 原文里提到了、但新要点一条都没覆盖、由服务端兜底补入的关注点。
    * 它们是"卡片生成时用户填过的关注点"，重新提炼时同样要保住。

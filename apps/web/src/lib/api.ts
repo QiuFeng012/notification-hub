@@ -135,6 +135,7 @@ export function createCardApi(): CardApi {
       if (!payload || typeof payload.title !== 'string' || !Array.isArray(payload.keyPoints)) {
         throw new ApiError('INVALID_RESPONSE', '服务端返回的提炼结果格式不正确', 500);
       }
+      const rawSchedules = Array.isArray(payload.schedules) ? payload.schedules : [];
       return {
         rawText: typeof payload.rawText === 'string' ? payload.rawText : rawText,
         title: payload.title,
@@ -143,6 +144,10 @@ export function createCardApi(): CardApi {
         keyPoints: payload.keyPoints.filter((item): item is string => typeof item === 'string'),
         provider: payload.provider === 'deepseek' ? 'deepseek' : 'mock',
         schedule: toScheduleOrNull(payload.schedule),
+        // 官方改口径时常常是"报名截止推迟"而活动照旧，拆开列出才看得出动的是哪个
+        schedules: rawSchedules
+          .map((item) => toScheduleOrNull(item))
+          .filter((item): item is CardSchedule => item !== null),
         supplementedKeywords: Array.isArray(payload.supplementedKeywords)
           ? payload.supplementedKeywords.filter((item): item is string => typeof item === 'string')
           : [],

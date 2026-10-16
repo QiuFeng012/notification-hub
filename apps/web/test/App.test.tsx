@@ -1,4 +1,4 @@
-﻿import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_HIGHLIGHT_STYLE } from '@notification-hub/shared';
@@ -17,6 +17,9 @@ function makeCard(overrides: Partial<CardView> = {}): CardView {
     keyPoints: ['3月5日14:00开放选课', '3月8日24:00前完成'],
     rawText: '【教务处】选课通知原文',
     schedule: null,
+    // schedules 是权威字段，必须跟着 schedule 一起变，否则库里会留下
+    // "主日程为 null 却还有一条 schedules" 的矛盾数据（日历会多画一条）
+    schedules: [],
     keywords: { priority: [], hit: [], missed: [] },
     provider: 'deepseek',
     createdAt: '2025-03-05T06:32:00.000Z',
@@ -25,6 +28,11 @@ function makeCard(overrides: Partial<CardView> = {}): CardView {
     revisionCount: 0,
     pinned: false,
     ...overrides,
+    // 显式传了 schedule 时，schedules 要跟着它（包括传 null 的情形），
+    // 否则会留下"主日程为 null 却还有一条 schedules"的矛盾数据
+    ...('schedule' in overrides && !('schedules' in overrides)
+      ? { schedules: overrides.schedule ? [overrides.schedule] : [] }
+      : {}),
   };
 }
 
@@ -61,7 +69,7 @@ function createFakeApi(options: FakeApiOptions = {}) {
     source: '教务处',
     keyPoints: ['官方修改后的要点'],
     provider: 'mock' as const,
-    schedule: { start: '2026-10-22', end: '2026-10-22', dayCount: 1, label: '2026年10月22日', inferredYear: false },
+    schedule: { start: '2026-10-22', end: '2026-10-22', dayCount: 1, label: '2026年10月22日', inferredYear: false },    schedules: [{ start: '2026-10-22', end: '2026-10-22', dayCount: 1, label: '2026年10月22日', inferredYear: false }],
     supplementedKeywords: [],
   })),    setPinned: vi.fn(async (id: string, pinned: boolean) => ({
       ...((options.initial ?? []).find((card) => card.id === id) ?? makeCard()),

@@ -1044,6 +1044,22 @@ body {
   color: var(--span-ink, var(--text));
 }
 
+/**
+ * 日程角色标签（「报名截止」「活动」）。
+ *
+ * 一条通知有两个时间时，日历上会画两条颜色相同的条，只有标题分不清谁是谁。
+ * 标签用半透明底衬，保证落在任何荧光笔颜色上都还能读。
+ */
+.span__role {
+  display: inline-block;
+  margin-right: 5px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.22);
+  font-size: 10.5px;
+  font-weight: 600;
+}
+
 /* ---------- 当天安排 ---------- */
 
 .calendar__detail {

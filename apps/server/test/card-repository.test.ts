@@ -19,6 +19,7 @@ function makeCard(overrides: Partial<InfoCard> = {}): InfoCard {
     keyPoints: ['要点一', '要点二'],
     rawText: '通知原文',
     schedule: null,
+    schedules: [],
     keywords: { priority: [], hit: [], missed: [] },
     provider: 'mock',
     createdAt: new Date().toISOString(),
@@ -377,7 +378,7 @@ describe('sqlite 仓储', () => {
       .prepare(`SELECT schedule_version FROM cards WHERE id = 'old'`)
       .get() as unknown as { schedule_version: number };
     inspect.close();
-    assert.equal(Number(row.schedule_version), 2, '重算后应记下当前解析版本');
+    assert.equal(Number(row.schedule_version), 3, '重算后应记下当前解析版本');
   });
 
   it('中文与换行内容不会损坏', () => {

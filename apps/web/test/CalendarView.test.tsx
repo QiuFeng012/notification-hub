@@ -1,4 +1,4 @@
-﻿import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -32,6 +32,16 @@ function makeCard(overrides: Partial<CardView> = {}): CardView {
     keyPoints: ['要点一'],
     rawText: '原文',
     schedule: schedule('2025-03-05', '2025-03-08'),
+    // schedules 是权威字段，必须跟着 overrides 里的 schedule 一起变。
+    // 判据是"有没有显式传 schedule"，不能用真值判断——传 null 时也算传了，
+    // 否则 schedule: null 的卡片仍会带着一条 schedules 出现在日历上。
+    schedules: 'schedules' in overrides
+      ? (overrides.schedules ?? [])
+      : 'schedule' in overrides
+        ? overrides.schedule
+          ? [overrides.schedule]
+          : []
+        : [schedule('2025-03-05', '2025-03-08')],
     keywords: { priority: [], hit: [], missed: [] },
     provider: 'deepseek',
     createdAt: '2025-03-05T06:32:00.000Z',
@@ -82,7 +92,7 @@ function makeApis(
     source: '教务处',
     keyPoints: ['官方修改后的要点'],
     provider: 'mock' as const,
-    schedule: { start: '2026-10-22', end: '2026-10-22', dayCount: 1, label: '2026年10月22日', inferredYear: false },
+    schedule: { start: '2026-10-22', end: '2026-10-22', dayCount: 1, label: '2026年10月22日', inferredYear: false },    schedules: [{ start: '2026-10-22', end: '2026-10-22', dayCount: 1, label: '2026年10月22日', inferredYear: false }],
     supplementedKeywords: [],
   })),    setPinned: vi.fn(async (id: string, pinned: boolean) => makeCard({ id, pinned })),
     deleteCard: vi.fn(async () => undefined),
@@ -368,6 +378,43 @@ describe('区间：圆—矩形—圆', () => {
     const second = spansInWeek('2025-03-10')[0]?.style.getPropertyValue('--span-color');
     expect(first).toBe(second);
   });
+
+  it('一张卡有两个日程时，两条都画出来并各自带角色标签', async () => {
+    // 用户的实际诉求：报名截止与活动是两个时间，要各占一条、在日历上都看得见，
+    // 而不是合成一条 9-23~9-24 的区间（那看起来像"活动持续两天"）
+    const deadline = schedule('2025-03-23');
+    const activity = schedule('2025-03-24');
+    await openCalendar([
+      makeCard({
+        id: 'two',
+        title: '创意画活动',
+        schedule: deadline,
+        schedules: [
+          { ...deadline, role: 'deadline' },
+          { ...activity, role: 'activity' },
+        ],
+      }),
+    ]);
+    await screen.findByText('2025 年 3 月');
+
+    const spans = [...document.querySelectorAll('[data-card-id="two"]')] as HTMLElement[];
+    expect(spans).toHaveLength(2);
+    // 两条不该落在同一格（日期不同，必然不同列）
+    const columns = new Set(spans.map((span) => span.style.gridColumn));
+    expect(columns.size).toBe(2);
+    // 角色标签要显示出来，否则两条颜色相同的条分不清谁是谁
+    const labels = spans.map((span) => span.querySelector('.span__role')?.textContent);
+    expect(labels).toContain('报名截止');
+    expect(labels).toContain('活动');
+  });
+
+  it('只有一个日程时不显示角色标签', async () => {
+    // 绝大多数通知只有一个时间，给它加个"主要"标签只是噪声
+    await openCalendar([makeCard({ schedule: schedule('2025-03-05') })]);
+    await screen.findByText('2025 年 3 月');
+
+    expect(document.querySelector('.span__role')).toBeNull();
+  });
 });
 
 describe('未排期与空态', () => {
@@ -412,7 +459,7 @@ describe('未排期与空态', () => {
     source: '教务处',
     keyPoints: ['官方修改后的要点'],
     provider: 'mock' as const,
-    schedule: { start: '2026-10-22', end: '2026-10-22', dayCount: 1, label: '2026年10月22日', inferredYear: false },
+    schedule: { start: '2026-10-22', end: '2026-10-22', dayCount: 1, label: '2026年10月22日', inferredYear: false },    schedules: [{ start: '2026-10-22', end: '2026-10-22', dayCount: 1, label: '2026年10月22日', inferredYear: false }],
     supplementedKeywords: [],
   })),      setPinned: vi.fn(async (id: string, pinned: boolean) => makeCard({ id, pinned })),
       deleteCard: vi.fn(async () => undefined),

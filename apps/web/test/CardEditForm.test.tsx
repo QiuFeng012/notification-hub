@@ -15,6 +15,7 @@ function makeCard(overrides: Partial<CardView> = {}): CardView {
     keyPoints: ['要点一', '要点二'],
     rawText: '原文',
     schedule: null,
+    schedules: [],
     keywords: { priority: [], hit: [], missed: [] },
     provider: 'deepseek',
     createdAt: '2026-09-20T06:32:00.000Z',
@@ -42,6 +43,15 @@ function makePreview(overrides: Partial<ReExtractPreview> = {}): ReExtractPrevie
       label: '2026年10月22日',
       inferredYear: false,
     },
+    schedules: [
+      {
+        start: '2026-10-22',
+        end: '2026-10-22',
+        dayCount: 1,
+        label: '2026年10月22日',
+        inferredYear: false,
+      },
+    ],
     supplementedKeywords: [],
     ...overrides,
   };

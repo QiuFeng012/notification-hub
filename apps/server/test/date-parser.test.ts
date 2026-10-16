@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   addDays,
+  buildSchedules,
   daysBetween,
   daysInMonth,
   parseIsoDate,
@@ -339,6 +340,92 @@ describe('parseSchedule 「号」写法与日期优先于星期', () => {
     // 8 号本身像日期，所以这条会排期；记录当前取舍，不是为了证明它完美
     // （真要区分编号与日期需要语义判断，代价远大于收益）
     assert.ok(schedule('第8号文件') !== null);
+  });
+});
+
+describe('buildSchedules 多日程拆分', () => {
+  // 用户的实际诉求：一条通知里"报名截止"与"活动开始"是两个时间，
+  // 不能合成一个连续区间——那会把日历画成"活动从截止那天一直持续到活动那天"。
+  it('把报名截止与活动拆成两条，而不是合成一个区间', () => {
+    const result = buildSchedules(
+      '报名开始时间：9月23日12:30开始报名。活动时间：9月24日15:00-16:30在13栋举行。',
+      { anchor: ANCHOR, timeText: '2026年9月23日12:30' },
+    );
+
+    assert.equal(result.length, 2, `应拆成两条，实际 ${JSON.stringify(result)}`);
+    assert.equal(result[0]?.start, '2025-09-23');
+    assert.equal(result[1]?.start, '2025-09-24');
+    // 关键是**没有**把它们合成 9-23 ~ 9-24 的一个 2 天区间
+    assert.notEqual(result[0]?.dayCount, 2);
+  });
+
+  it('同一个句子里写成区间的仍然是区间', () => {
+    // 「10月17-18日」这种在归一化阶段被展开成完整写法，再合成为一个区间
+    const result = buildSchedules('松山湖校区体检时间：10月17-18日。', {
+      anchor: ANCHOR,
+      timeText: '10月17日',
+    });
+
+    assert.equal(result.length, 1, `应是一条区间，实际 ${JSON.stringify(result)}`);
+    assert.equal(result[0]?.start, '2025-10-17');
+    assert.equal(result[0]?.end, '2025-10-18');
+    assert.equal(result[0]?.dayCount, 2);
+  });
+
+  it('不同小句里的日期各自成条，不再跨句粘成一个区间', () => {
+    // 「3月5日14:00开放」与「3月8日24:00前完成」是两处独立的表述。
+    // 从前会把它们合成 3-05~3-08 的一个 4 天区间，日历上看起来像"活动持续四天"。
+    // 现在按小句分开——这也正是"报名截止"与"活动"能被拆开的前提。
+    const result = buildSchedules('本次选课于3月5日14:00开放，3月8日24:00前完成。', {
+      anchor: ANCHOR,
+      timeText: '3月5日14:00开放，3月8日24:00前完成',
+    });
+
+    assert.equal(result.length, 2, `应是两条，实际 ${JSON.stringify(result)}`);
+    assert.equal(result[0]?.start, '2025-03-05');
+    assert.equal(result[1]?.start, '2025-03-08');
+  });
+
+  it('同一件事被重复提到时并成一条', () => {
+    // 「10月17-18日体检」与「10月17、18日体检」说的是同一件事
+    const result = buildSchedules(
+      '松山湖校区体检时间：10月17-18日。10月17、18日（松山湖校区）早上7:00-11:30为体检时间。',
+      { anchor: ANCHOR, timeText: '10月17日' },
+    );
+
+    assert.equal(result.length, 1, `应并成一条，实际 ${JSON.stringify(result)}`);
+    assert.equal(result[0]?.start, '2025-10-17');
+    assert.equal(result[0]?.end, '2025-10-18');
+  });
+
+  it('截止与考核是两件事时各自成条', () => {
+    // 锚点是 2025-03-05，所以不给年份时按 2025 推断；time 提示也写成同年
+    const result = buildSchedules(
+      '问卷截止时间：10月14日22:00。初定考核时间为：10月24日19:30-22:30。',
+      { anchor: ANCHOR, timeText: '10月14日 22:00' },
+    );
+
+    assert.equal(result.length, 2, `应拆成两条，实际 ${JSON.stringify(result)}`);
+    assert.equal(result[0]?.start, '2025-10-14');
+    assert.equal(result[1]?.start, '2025-10-24');
+  });
+
+  it('「当天」这类相对词不会在卡片创建日上多出一条安排', () => {
+    // 锚点是 2025-03-05；「卫检当天」不是 3 月 5 日
+    const result = buildSchedules('请于3月8日16:00前交表。卫检当天请留人在宿舍。', {
+      anchor: ANCHOR,
+      timeText: '3月8日16:00前',
+    });
+
+    assert.ok(
+      result.every((item) => item.start !== '2025-03-05'),
+      `不该在创建日上排期，实际 ${JSON.stringify(result)}`,
+    );
+  });
+
+  it('空文本返回空数组', () => {
+    assert.deepEqual(buildSchedules('', { anchor: ANCHOR }), []);
+    assert.deepEqual(buildSchedules(null, { anchor: ANCHOR }), []);
   });
 });
 

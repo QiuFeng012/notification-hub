@@ -13,6 +13,12 @@ export interface CalendarDay {
 /** 区间在某一周里的横向占位（列下标 0-6，闭区间） */
 export interface ScheduleSpan<T> {
   card: T;
+  /**
+   * 这条区间对应卡片上的第几条日程。
+   * 一条通知可能同时有"报名截止"与"活动"，同一张卡会有多条区间；
+   * 界面靠它取出该条日程自己的角色标签。
+   */
+  scheduleIndex: number;
   /** 起始列；区间从更早的周延续过来时固定在 0 */
   startColumn: number;
   /** 结束列；区间延续到下一周时固定在 6 */
@@ -166,23 +172,39 @@ export interface BuildMonthOptions<T> {
  * "本列之前已空出"的轨道。这样重合的区间一定落在不同行，
  * 而不重合的区间会尽量共用同一行，避免行数虚增。
  */
-export function buildMonthWeeks<T extends { id: string; schedule: CardSchedule | null }>(
-  options: BuildMonthOptions<T>,
-): Array<CalendarWeek<T>> {
+export function buildMonthWeeks<
+  T extends { id: string; schedule: CardSchedule | null; schedules?: CardSchedule[] },
+>(options: BuildMonthOptions<T>): Array<CalendarWeek<T>> {
   const { year, month, today, cards } = options;
   const rawWeeks = weeksOfMonth(year, month);
 
-  // 只保留与本月有交集的排期。
-  // end < start 的区间是坏数据（日期被改坏或解析异常），直接排除——
-  // 画出来会横跨整月，比不显示更容易误导。
   const monthStart = toIso(year, month, 1);
   const monthEnd = toIso(year, month, new Date(year, month, 0).getDate());
-  const relevant = cards.filter((card) => {
-    const schedule = card.schedule;
-    if (!schedule) return false;
-    if (schedule.end < schedule.start) return false;
-    return schedule.start <= monthEnd && schedule.end >= monthStart;
-  });
+
+  /**
+   * 取这张卡要画的所有日程。
+   *
+   * 一条通知可能同时给"报名截止"与"活动"两个时间（服务端已拆成多条），
+   * 日历要各画一条。schedules 缺失时退回单条 schedule，
+   * 这样老数据与只传了 schedule 的调用方都不受影响。
+   *
+   * end < start 的区间是坏数据（日期被改坏或解析异常），直接排除——
+   * 画出来会横跨整月，比不显示更容易误导。
+   */
+  const schedulesOf = (card: T): CardSchedule[] => {
+    const list = card.schedules && card.schedules.length > 0 ? card.schedules : card.schedule ? [card.schedule] : [];
+    return list.filter((item) => item.end >= item.start);
+  };
+
+  // 只保留与本月有交集的（卡片，日程下标）对
+  const relevant: Array<{ card: T; schedule: CardSchedule; scheduleIndex: number }> = [];
+  for (const card of cards) {
+    schedulesOf(card).forEach((schedule, scheduleIndex) => {
+      if (schedule.start <= monthEnd && schedule.end >= monthStart) {
+        relevant.push({ card, schedule, scheduleIndex });
+      }
+    });
+  }
 
   return rawWeeks.map((week) => {
     const days: CalendarDay[] = week.map((item) => item.date).map((date, index) => ({
@@ -198,10 +220,17 @@ export function buildMonthWeeks<T extends { id: string; schedule: CardSchedule |
     // 本周可见的区间。
     // 列区间同样按星期几算：沿用上一周时起点固定在周一（列 0），
     // 延续到下一周时终点固定在周日（列 6）。
-    const candidates: Array<{ card: T; startColumn: number; endColumn: number; startsHere: boolean; endsHere: boolean }> = [];
-    for (const card of relevant) {
-      const schedule = card.schedule;
-      if (!schedule || !first || !last) continue;
+    const candidates: Array<{
+      card: T;
+      scheduleIndex: number;
+      startColumn: number;
+      endColumn: number;
+      startsHere: boolean;
+      endsHere: boolean;
+    }> = [];
+    for (const entry of relevant) {
+      const { card, schedule, scheduleIndex } = entry;
+      if (!first || !last) continue;
       if (schedule.start > last.date || schedule.end < first.date) continue;
 
       const startsHere = schedule.start >= first.date;
@@ -220,7 +249,7 @@ export function buildMonthWeeks<T extends { id: string; schedule: CardSchedule |
       }
       if (endColumn < startColumn) continue;
 
-      candidates.push({ card, startColumn, endColumn, startsHere, endsHere });
+      candidates.push({ card, scheduleIndex, startColumn, endColumn, startsHere, endsHere });
     }
 
     // 开始列靠前的先分配；同列时区间长的优先，减少碎片
@@ -241,6 +270,7 @@ export function buildMonthWeeks<T extends { id: string; schedule: CardSchedule |
       }
       spans.push({
         card: candidate.card,
+        scheduleIndex: candidate.scheduleIndex,
         startColumn: candidate.startColumn,
         endColumn: candidate.endColumn,
         startsHere: candidate.startsHere,

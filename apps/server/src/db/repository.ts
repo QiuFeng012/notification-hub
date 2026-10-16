@@ -1,4 +1,4 @@
-import type { CardRevision, InfoCard } from '@notification-hub/shared';
+import type { CardRevision, CardSchedule, InfoCard } from '@notification-hub/shared';
 
 /** 一次编辑的输入：只包含要改的字段，未传的保持不变 */
 export interface CardUpdateInput {
@@ -6,6 +6,12 @@ export interface CardUpdateInput {
   time?: string | null;
   source?: string | null;
   keyPoints?: string[];
+  /**
+   * 重新算好的全部日程。
+   * 不传也可以：仓储会按**当前时间文本与原文**重算（每次保存都重算）。
+   * 传了就用传入的——服务端装配时算过一次，不必再算第二遍。
+   */
+  schedules?: CardSchedule[];
 }
 
 /**
