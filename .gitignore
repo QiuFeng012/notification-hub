@@ -28,3 +28,6 @@ coverage/
 
 # 界面截图（scripts/screenshot.mts 的产物，仅用于人工核对）
 /*.png
+
+# Windows 快捷方式：含绝对路径与本机图标缓存，不入库，由 install-desktop-app.ps1 在本机生成
+*.lnk

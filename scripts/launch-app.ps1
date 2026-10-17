@@ -40,6 +40,7 @@ if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
 
 $appUrl = "http://127.0.0.1:$Port/"
 $startScript = Join-Path $RepoRoot 'scripts\start-server.ps1'
+$prepareScript = Join-Path $RepoRoot 'scripts\prepare.ps1'
 $logDir = Join-Path $env:LOCALAPPDATA 'NotificationHub'
 $logFile = Join-Path $logDir 'launch.log'
 
@@ -68,6 +69,21 @@ Set-WindowTitle
 Write-Host ""
 Write-Host "  信息整合台" -ForegroundColor Cyan
 Write-Host "  ----------------------------------------"
+
+# ---------- 0. 环境自检与首次准备 ----------
+# 仓库里不含 node_modules 与 dist，所以别人刚克隆下来直接启动会在构建那一步崩掉，
+# 而且报出来的是 pnpm 的语法错误，看不出真正原因是"还没装依赖"。
+# prepare.ps1 幂等：已经准备好时只做几次版本检查，几十毫秒就返回。
+if (Test-Path $prepareScript) {
+  & $prepareScript -RepoRoot $RepoRoot
+  if ($LASTEXITCODE -ne 0) {
+    Write-Log "环境准备未通过（prepare.ps1 退出码 $LASTEXITCODE）"
+    exit 1
+  }
+} else {
+  # 老版本仓库没有这个脚本时不要直接失败：后面的步骤仍然有可能成功
+  Write-Log "没有找到 prepare.ps1，跳过环境自检"
+}
 
 # ---------- 1. 服务 ----------
 # 已经在跑就绝不再拉一个：端口会撞车，用户会看到两条错误却不知道该信哪条。

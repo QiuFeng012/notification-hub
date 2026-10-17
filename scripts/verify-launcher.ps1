@@ -186,6 +186,26 @@ Check "停止脚本不会误杀其他 node 进程" `
 Check "启动脚本支持检测端口占用" ($startScript -match 'Get-NetTCPConnection')
 Check "启动脚本等待服务就绪而不是盲目打开页面" ($startScript -match 'Test-ServiceReady')
 
+# ---------- 3a. 便携启动（别人克隆后双击就能跑） ----------
+Write-Host "`n3a. 便携启动"
+$prepareScript = Get-Content (Join-Path $scriptsDir 'prepare.ps1') -Raw -ErrorAction SilentlyContinue
+Check "存在 prepare.ps1（首次安装依赖+构建的入口）" ([bool]$prepareScript)
+Check "prepare.ps1 检查 Node 版本（低版本没有 node:sqlite）" `
+  ($prepareScript -match '22\.5|nodeVersion.*-lt|\[version\]')
+Check "prepare.ps1 检查 pnpm（仓库是 pnpm workspace）" ($prepareScript -match 'pnpm')
+Check "prepare.ps1 缺依赖时执行 pnpm install" ($prepareScript -match 'pnpm install')
+Check "prepare.ps1 缺构建产物时执行 pnpm build" ($prepareScript -match 'pnpm build')
+Check "launch-app.ps1 在启动前调用 prepare.ps1" `
+  ((Get-Content (Join-Path $scriptsDir 'launch-app.ps1') -Raw) -match 'prepare\.ps1')
+# 换端口必须真正生效：服务端从 PORT 环境变量读端口，
+# 起进程时若不注入就会永远绑 5178——实测过传 -Port 5180 仍监听 5178。
+Check "start-server.ps1 把 -Port 注入子进程的 PORT 环境变量" `
+  ($startScript -match "EnvironmentVariables\['PORT'\]")
+Check "双击入口调用的是 launch-app（起服务并开应用窗口）" `
+  ((Get-Content (Join-Path $repoRoot '启动信息整合台.bat') -Raw) -match 'launch-app\.ps1')
+Check "快捷方式不入库（.lnk 含绝对路径，由脚本在本机生成）" `
+  ((Get-Content (Join-Path $repoRoot '.gitignore') -Raw) -match '\.lnk')
+
 # 日历的星期表头与周行必须共用同一套盒子模型（左边界、宽度、列间距、内边距）。
 # 曾经它们各写各的：表头只有 gap，周行另加 padding 与边框，列宽差了 2.7px，
 # 偏差按列累加，表现为"周日日期没对齐"。真正的对齐由 pnpm verify:ui 在真实
@@ -225,6 +245,14 @@ foreach ($name in @('status.ps1', 'stop-server.ps1')) {
   $result = Invoke-Capture (Join-Path $scriptsDir $name) @('-Port', "$Port")
   Check "$name 能正常执行" ($result.Code -eq 0) "退出码 $($result.Code)：$($result.Output)"
 }
+
+# prepare.ps1 也要真的跑一次：它是"别人克隆后双击"的第一道闸，
+# 已经就绪时应当几十毫秒返回 0，而不是卡住或误报缺依赖。
+# 不传 -RepoRoot（路径含空格会被 Invoke-Capture 拆成两个参数）：
+# prepare.ps1 自己会从 $PSScriptRoot 推导项目根。
+$prepare = Invoke-Capture (Join-Path $scriptsDir 'prepare.ps1') @()
+Check "prepare.ps1 在已就绪时快速返回 0" ($prepare.Code -eq 0) "退出码 $($prepare.Code)：$($prepare.Output)"
+Check "prepare.ps1 报告已就绪" ($prepare.Output -match '已就绪')
 
 # ---------- 4. 真实的启停循环 ----------
 if ($Functional) {

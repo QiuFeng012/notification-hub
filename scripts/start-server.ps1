@@ -129,6 +129,11 @@ $process.StartInfo.Arguments = '/c ' + $cmdLine
 $process.StartInfo.WorkingDirectory = $serverDir
 $process.StartInfo.UseShellExecute = $false
 $process.StartInfo.CreateNoWindow = $true
+# 服务端从环境变量 PORT 读端口（见 apps/server/src/config.ts）。
+# 不设这个变量的话，-Port 只改健康检查的地址，服务器永远绑 5178——
+# 实测过一次：传 -Port 5180 起出来的服务仍监听 5178，换端口等于没换。
+# 用 ProcessStartInfo.EnvironmentVariables 注入（已单独验证能传给子进程）。
+$process.StartInfo.EnvironmentVariables['PORT'] = [string]$Port
 
 $ready = $false
 try {
