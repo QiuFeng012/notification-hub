@@ -17,6 +17,7 @@ type CardView = 'list' | 'calendar';
 
 const SORT_STORAGE_KEY = 'notification-hub.sort-mode';
 const CARD_VIEW_STORAGE_KEY = 'notification-hub.card-view';
+const MOCK_HINT_STORAGE_KEY = 'notification-hub.mock-hint-dismissed';
 
 /**
  * 读界面偏好。localStorage 在隐私模式或跨域 iframe 里会直接抛异常，
@@ -36,6 +37,14 @@ function readStoredCardView(): CardView {
     return window.localStorage.getItem(CARD_VIEW_STORAGE_KEY) === 'calendar' ? 'calendar' : 'list';
   } catch {
     return 'list';
+  }
+}
+
+function readMockHintDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(MOCK_HINT_STORAGE_KEY) === '1';
+  } catch {
+    return false;
   }
 }
 
@@ -68,6 +77,8 @@ export default function App({ api, settingsApi, today }: AppProps = {}) {
   const [page, setPage] = useState<AppPage>(readPageFromLocation);
   const [cardView, setCardView] = useState<CardView>(readStoredCardView);
   const [sortMode, setSortMode] = useState<CardSortMode>(readStoredSortMode);
+  /** 未配置 Key 的提示是否已被用户关掉（记住选择，下次不再打扰） */
+  const [mockHintDismissed, setMockHintDismissed] = useState(readMockHintDismissed);
 
   const todayIso = today ?? toIsoDate(new Date());
   const highlight = settings.settings?.highlight ?? DEFAULT_HIGHLIGHT_STYLE;
@@ -140,13 +151,30 @@ export default function App({ api, settingsApi, today }: AppProps = {}) {
         </div>
       ) : null}
 
-      {usingMock ? (
+      {usingMock && !mockHintDismissed ? (
         <p className="notice notice--mock">
-          当前是<strong>本地启发式摘要</strong>——在
-          <button type="button" className="notice__link" onClick={() => navigate('settings')}>
-            设置页
+          <span>
+            当前是<strong>本地启发式摘要</strong>——在
+            <button type="button" className="notice__link" onClick={() => navigate('settings')}>
+              设置页
+            </button>
+            里填入 DeepSeek API Key 即可启用真实 AI 总结。
+          </span>
+          <button
+            type="button"
+            className="notice__close"
+            aria-label="不再提示"
+            onClick={() => {
+              setMockHintDismissed(true);
+              try {
+                window.localStorage.setItem(MOCK_HINT_STORAGE_KEY, '1');
+              } catch {
+                // 存不下就当次生效
+              }
+            }}
+          >
+            ×
           </button>
-          里填入 DeepSeek API Key 即可启用真实 AI 总结。
         </p>
       ) : null}
 

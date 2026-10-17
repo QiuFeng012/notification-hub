@@ -31,3 +31,6 @@ coverage/
 
 # Windows 快捷方式：含绝对路径与本机图标缓存，不入库，由 install-desktop-app.ps1 在本机生成
 *.lnk
+
+# 便携运行时：由 scripts/runtime.ps1 自动下载的 Node 与 pnpm（几十 MB，不入库）
+.runtime/

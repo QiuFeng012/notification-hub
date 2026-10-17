@@ -190,9 +190,7 @@ Check "启动脚本等待服务就绪而不是盲目打开页面" ($startScript 
 Write-Host "`n3a. 便携启动"
 $prepareScript = Get-Content (Join-Path $scriptsDir 'prepare.ps1') -Raw -ErrorAction SilentlyContinue
 Check "存在 prepare.ps1（首次安装依赖+构建的入口）" ([bool]$prepareScript)
-Check "prepare.ps1 检查 Node 版本（低版本没有 node:sqlite）" `
-  ($prepareScript -match '22\.5|nodeVersion.*-lt|\[version\]')
-Check "prepare.ps1 检查 pnpm（仓库是 pnpm workspace）" ($prepareScript -match 'pnpm')
+Check "prepare.ps1 委托 runtime.ps1 解析 Node 版本与 pnpm" ($prepareScript -match 'runtime\.ps1')
 Check "prepare.ps1 缺依赖时执行 pnpm install" ($prepareScript -match 'pnpm install')
 Check "prepare.ps1 缺构建产物时执行 pnpm build" ($prepareScript -match 'pnpm build')
 Check "launch-app.ps1 在启动前调用 prepare.ps1" `
@@ -205,6 +203,23 @@ Check "双击入口调用的是 launch-app（起服务并开应用窗口）" `
   ((Get-Content (Join-Path $repoRoot '启动信息整合台.bat') -Raw) -match 'launch-app\.ps1')
 Check "快捷方式不入库（.lnk 含绝对路径，由脚本在本机生成）" `
   ((Get-Content (Join-Path $repoRoot '.gitignore') -Raw) -match '\.lnk')
+
+# Node/pnpm 自动配置：runtime.ps1 是"新用户没有 node 也能跑"的地基。
+$runtimeScript = Get-Content (Join-Path $scriptsDir 'runtime.ps1') -Raw -ErrorAction SilentlyContinue
+Check "存在 runtime.ps1（解析/下载 Node 与 pnpm）" ([bool]$runtimeScript)
+Check "runtime.ps1 锁死 Node 版本（以后升级只改这里）" ($runtimeScript -match "LockedNodeVersion\s*=\s*'[0-9]+\.[0-9]+\.[0-9]+'")
+Check "runtime.ps1 下载 Node 便携 zip" ($runtimeScript -match 'nodejs\.org/dist|node-v\$version')
+Check "runtime.ps1 校验下载的 SHA256" ($runtimeScript -match 'Get-FileHash')
+Check "runtime.ps1 把 node 目录放进 PATH（pnpm/npm 垫片按名字找 node）" `
+  ($runtimeScript -match 'env:PATH\s*=\s*"\$nodeDir')
+Check "runtime.ps1 把 pnpm 目录放进 PATH（pnpm build 里递归调 pnpm）" `
+  ($runtimeScript -match 'env:PATH\s*=\s*"\$pnpmDir')
+Check "便携运行时不入库（.runtime 几十 MB）" `
+  ((Get-Content (Join-Path $repoRoot '.gitignore') -Raw) -match '\.runtime')
+Check "start-server.ps1 用解析出的 node 而非 PATH 里的裸 node" `
+  ($startScript -match '\$NodeExe')
+Check "package.json 锁 pnpm 版本（packageManager）" `
+  ((Get-Content (Join-Path $repoRoot 'package.json') -Raw) -match 'packageManager')
 
 # 日历的星期表头与周行必须共用同一套盒子模型（左边界、宽度、列间距、内边距）。
 # 曾经它们各写各的：表头只有 gap，周行另加 padding 与边框，列宽差了 2.7px，

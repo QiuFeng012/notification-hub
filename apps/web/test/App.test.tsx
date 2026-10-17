@@ -387,6 +387,16 @@ describe('信息卡展示', () => {
     expect(document.querySelector('.notice--mock')).toBeNull();
   });
 
+  it('mock 提示可以关掉，关掉后不再出现', async () => {
+    renderCardsApp(createFakeApi({ initial: [makeCard({ provider: 'mock' })] }));
+
+    await screen.findByText(/本地启发式摘要/);
+    await userEvent.click(screen.getByRole('button', { name: '不再提示' }));
+    await waitFor(() => expect(document.querySelector('.notice--mock')).toBeNull());
+    // 记住选择：重新挂载也不该再出现
+    expect(window.localStorage.getItem('notification-hub.mock-hint-dismissed')).toBe('1');
+  });
+
   it('没有要点的卡片给出说明而不是空白', async () => {
     renderCardsApp(createFakeApi({ initial: [makeCard({ keyPoints: [] })] }));
     expect(await screen.findByText('这条通知没有提炼出要点。')).toBeInTheDocument();

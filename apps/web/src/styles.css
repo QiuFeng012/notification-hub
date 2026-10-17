@@ -2074,6 +2074,30 @@ body {
   color: var(--text-muted);
   font-size: 12.5px;
   line-height: 1.75;
+  /* 提示条现在有一个右侧的关闭按钮，正文与按钮分居两端 */
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+/* 提示条右上角的关闭按钮：关掉后记住选择，不再每次打扰 */
+.notice__close {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.notice__close:hover {
+  background: var(--border);
+  color: var(--text);
 }
 
 .notice--mock {

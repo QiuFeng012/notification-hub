@@ -35,6 +35,11 @@ $logFile = Join-Path $env:TEMP 'notification-hub-server.log'
 $errFile = Join-Path $env:TEMP 'notification-hub-server.err.log'
 $appUrl = "http://127.0.0.1:$Port/"
 
+# 解析要用的 node / pnpm（新用户机器上没有 Node 时，runtime.ps1 会下载锁死版本）。
+# 正常情况下 launch-app.ps1 已经先跑过 prepare.ps1，这里只是几十毫秒地再确认一次。
+. (Join-Path $PSScriptRoot 'runtime.ps1')
+Initialize-Runtime
+
 function Set-WindowTitle {
   try { $Host.UI.RawUI.WindowTitle = '信息整合台' } catch { }
 }
@@ -99,7 +104,7 @@ if (-not (Test-Path $entry) -or -not (Test-Path $webIndex)) {
   Write-Warn2 "缺少构建产物，正在构建（首次启动会慢一些）"
   Push-Location $RepoRoot
   try {
-    & pnpm build
+    & $PnpmCmd build
     if ($LASTEXITCODE -ne 0) {
       Write-Err2 "构建失败，请查看上方输出"
       exit 1
@@ -122,10 +127,16 @@ if (-not (Test-Path $entry)) {
 # 这里直接创建进程，并把日志重定向交给 cmd —— 我们不需要读子进程的输出管道，
 # 所以三个流一个都不设 Redirect*，不留下任何需要我们去读的管道。
 Write-Step "正在启动服务…"
-$cmdLine = 'node --env-file-if-exists=../../.env dist\index.js >> "' + $logFile + '" 2>> "' + $errFile + '"'
+# 用 runtime.ps1 解析出的 node（可能是 .runtime\node\node.exe），而不是 PATH 里的：
+# 新用户机器上 PATH 里根本没有 node。路径加引号，因为它可能含空格。
+$cmdLine = '"' + $NodeExe + '" --env-file-if-exists=../../.env dist\index.js >> "' + $logFile + '" 2>> "' + $errFile + '"'
 $process = New-Object System.Diagnostics.Process
 $process.StartInfo.FileName = 'cmd.exe'
-$process.StartInfo.Arguments = '/c ' + $cmdLine
+# cmd /c 的引号规则很怪：命令里已有引号（node 路径带空格、>> 的文件名）时，
+# 必须整条命令再包一对外层引号，cmd 才会剥掉外层、把内层原样执行。
+# 不包的话 "C:\Program Files\nodejs\node.exe" 会被拆成 C:\Program 两个词，
+# 实测报 "'C:\Program' is not recognized"。
+$process.StartInfo.Arguments = '/c "' + $cmdLine + '"'
 $process.StartInfo.WorkingDirectory = $serverDir
 $process.StartInfo.UseShellExecute = $false
 $process.StartInfo.CreateNoWindow = $true
