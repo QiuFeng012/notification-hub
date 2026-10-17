@@ -7,6 +7,12 @@ export interface CardUpdateInput {
   source?: string | null;
   keyPoints?: string[];
   /**
+   * 新的原文（官方改了通知时）。
+   *
+   * 排期是从原文解析的：只改时间不改原文，新文本里的日期就进不了日历。
+   */
+  rawText?: string;
+  /**
    * 重新算好的全部日程。
    * 不传也可以：仓储会按**当前时间文本与原文**重算（每次保存都重算）。
    * 传了就用传入的——服务端装配时算过一次，不必再算第二遍。

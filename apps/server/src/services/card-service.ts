@@ -113,7 +113,7 @@ function normalizeOptionalText(  value: unknown,
 
 /** 把编辑请求收敛成仓储能接受的 patch；字段未传表示不改 */
 export function normalizeCardPatch(input: unknown): {
-  patch: { title?: string; time?: string | null; source?: string | null; keyPoints?: string[] };
+  patch: { title?: string; time?: string | null; source?: string | null; keyPoints?: string[]; rawText?: string };
   reason: CardRevision['reason'];
   note: string | null;
 } {
@@ -130,7 +130,7 @@ export function normalizeCardPatch(input: unknown): {
     );
   }
 
-  const patch: { title?: string; time?: string | null; source?: string | null; keyPoints?: string[] } = {};
+  const patch: { title?: string; time?: string | null; source?: string | null; keyPoints?: string[]; rawText?: string } = {};
 
   if (body.title !== undefined) {
     if (typeof body.title !== 'string') {
@@ -182,6 +182,15 @@ export function normalizeCardPatch(input: unknown): {
       );
     }
     patch.keyPoints = points;
+  }
+
+  // 原文可以被替换（官方改了口径）。校验沿用新建时那一套：
+  // 太短／超长都要当场拒绝，而不是存进去之后让排期悄悄算错。
+  if (body.rawText !== undefined) {
+    if (typeof body.rawText !== 'string') {
+      throw new ValidationError('INVALID_BODY', 'rawText 必须是字符串');
+    }
+    patch.rawText = normalizeRawText(body.rawText);
   }
 
   if (Object.keys(patch).length === 0) {
@@ -295,10 +304,15 @@ export function createCardService(
       // 时间文本可能被改过，也可能没改（官方只改了措辞）。
       // 无论哪种都重算一遍日程：一条通知里的"报名截止"与"活动"要拆成多条，
       // 这件事与"时间变没变"无关。锚点仍用卡片创建时间。
+      //
+      // **原文优先用这次传上来的**：官方改通知时，新日期只存在于新原文里，
+      // 拿旧原文重算会把新日期整条漏掉（真实缺陷：卡片的时间已经改成
+      // 10 月 29 日，日历上却还只有旧原文里的 10 月 20 日）。
       const anchor = new Date(existing.createdAt);
       const nextTime = patch.time !== undefined ? patch.time : existing.time;
+      const nextRawText = patch.rawText ?? existing.rawText;
       const schedules = resolveSchedules(
-        existing.rawText,
+        nextRawText,
         nextTime,
         Number.isNaN(anchor.getTime()) ? new Date() : anchor,
       );

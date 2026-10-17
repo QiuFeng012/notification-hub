@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict';
+﻿import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   addDays,
@@ -349,7 +349,7 @@ describe('buildSchedules 多日程拆分', () => {
   it('把报名截止与活动拆成两条，而不是合成一个区间', () => {
     const result = buildSchedules(
       '报名开始时间：9月23日12:30开始报名。活动时间：9月24日15:00-16:30在13栋举行。',
-      { anchor: ANCHOR, timeText: '2026年9月23日12:30' },
+      { anchor: ANCHOR, timeText: '9月23日12:30' },
     );
 
     assert.equal(result.length, 2, `应拆成两条，实际 ${JSON.stringify(result)}`);

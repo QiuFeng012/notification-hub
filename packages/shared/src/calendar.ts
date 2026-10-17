@@ -84,6 +84,14 @@ export interface UpdateCardRequest {
   time?: string | null;
   source?: string | null;
   keyPoints?: string[];
+  /**
+   * 官方修改后的原文。
+   *
+   * 必须能被更新：排期是从**原文**解析出来的，只换时间而不换原文时，
+   * 新通知里那些日期（「检查时间改为 10 月 29 日」）永远进不了日历，
+   * 而卡片的「时间」已经变了——两边对不上，表现就是"事件没显示"。
+   */
+  rawText?: string;
   /** 修改原因，必填——否则日后无法解释这条为什么和原文不一致 */
   reason: RevisionReason;
   note?: string;

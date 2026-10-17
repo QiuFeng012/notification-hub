@@ -225,8 +225,11 @@ function rowToRevision(row: RevisionRow): CardRevision {
  *    （示例：10月22号（第八周周四）被排到了 10-15）
  * 3：把一条通知里的"报名截止"与"活动"拆成多条日程（schedules 列）
  *    （示例：9月23日报名截止 + 9月24日活动，原先被合成 9-23~9-24 一个区间）
+ * 4：主日程改为 time 指向的那一条，并保证它排在最前
+ *    （原先取时间最早的一条：体检卡的时间写着 10-20，日程标签却显示 10-11；
+ *     图像采集卡的时间写着 10-18，标签却显示 9-25 的交表截止）
  */
-const SCHEDULE_VERSION = 3;
+const SCHEDULE_VERSION = 4;
 
 /**
  * 轻量迁移：给老数据库补上没有的列。
@@ -305,7 +308,7 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
   const deleteStmt = db.prepare(`DELETE FROM cards WHERE id = ?`);
   const updateStmt = db.prepare(
     `UPDATE cards
-        SET title = ?, time = ?, source = ?, key_points = ?, schedule = ?, schedules = ?,
+        SET title = ?, time = ?, source = ?, key_points = ?, raw_text = ?, schedule = ?, schedules = ?,
             schedule_computed = 1, schedule_version = ?,
             updated_at = ?, revision_count = revision_count + 1
       WHERE id = ?`,
@@ -418,6 +421,9 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
       const nextTime = patch.time !== undefined ? patch.time : existing.time;
       const nextSource = patch.source !== undefined ? patch.source : existing.source;
       const nextKeyPoints = patch.keyPoints ?? existing.keyPoints;
+      // 原文也可能被换掉（官方改了通知）。排期必须按**新原文**算，
+      // 否则新文本里的日期永远进不了日历。
+      const nextRawText = patch.rawText ?? existing.rawText;
 
       // 排期**每次都重算**，不只在时间文本变化时算。
       //
@@ -436,7 +442,7 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
       };
       // 优先用调用方算好的（服务端装配时已经算过一次，不必重复劳动）；
       // 没给就按当前时间文本与原文现算。
-      const fromRaw = patch.schedules ?? buildSchedules(existing.rawText, options);
+      const fromRaw = patch.schedules ?? buildSchedules(nextRawText, options);
       const nextSchedules = fromRaw.length > 0 ? fromRaw : (() => {
         const single = parseSchedule(nextTime, options);
         return single ? [single] : [];
@@ -461,6 +467,7 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
         nextTime,
         nextSource,
         JSON.stringify(nextKeyPoints),
+        nextRawText,
         nextSchedules[0] ? JSON.stringify(nextSchedules[0]) : null,
         nextSchedules.length > 0 ? JSON.stringify(nextSchedules) : null,
         SCHEDULE_VERSION,
@@ -560,13 +567,14 @@ export function createMemoryCardRepository(): CardRepository {
       revisions.set(id, history);
 
       const nextTime = patch.time !== undefined ? patch.time : existing.time;
+      const nextRawText = patch.rawText ?? existing.rawText;
       const anchor = new Date(existing.createdAt);
       const options = {
         anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,
         timeText: nextTime,
       };
       // 与 sqlite 版同样的口径：每次都重算、优先用调用方算好的、退回 time 单条
-      const fromRaw = patch.schedules ?? buildSchedules(existing.rawText, options);
+      const fromRaw = patch.schedules ?? buildSchedules(nextRawText, options);
       const nextSchedules = fromRaw.length > 0 ? fromRaw : (() => {
         const single = parseSchedule(nextTime, options);
         return single ? [single] : [];
@@ -578,6 +586,7 @@ export function createMemoryCardRepository(): CardRepository {
         time: nextTime,
         source: patch.source !== undefined ? patch.source : existing.source,
         keyPoints: patch.keyPoints ?? existing.keyPoints,
+        rawText: nextRawText,
         schedule: nextSchedules[0] ?? null,
         schedules: nextSchedules,
         updatedAt: now,

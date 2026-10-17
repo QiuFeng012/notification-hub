@@ -1,4 +1,4 @@
-﻿/**
+/**
  * 从通知的时间文本里解析出结构化日期范围。
  *
  * 为什么要有这一层：卡片存的 `time` 是自由文本（"3月8日24:00前"），
@@ -593,9 +593,29 @@ export function buildSchedules(
   const matchesHint = (item: DateSchedule) =>
     timeHint !== undefined && timeHint !== null && item.start <= timeHint.start && item.end >= timeHint.end;
 
-  const primarySource =
-    allCandidates.find(matchesHint) ??
-    deadlineRanges[0] ??
+  /**
+   * `time` 文本写明的那个日子，是这张卡的**准日子**（模型已经提炼过）。
+   *
+   * 原文里若找不到对应的句子（官方改了时间、而原文还是旧版），仍必须以它为准：
+   * 否则卡片的「时间」与「日程」会对不上——用户看到的是两个互相矛盾的日子。
+   * 这类情况真实出现过：「时间」写着 10 月 29 日，日程却显示 10 月 20 日。
+   *
+   * 但只在**原文里没有任何一条与它重叠**时才补。原文已经写了好几件事时，
+   * 硬塞一条 time 的区间会把它们的拆分盖掉（「3月5日开放…3月8日完成」
+   * 会被合成一条 4 天，两件事重新粘在一起）。
+   */
+  const hintIsCovered =
+    timeHint !== undefined && timeHint !== null && allCandidates.some((item) => schedulesOverlap(item, timeHint));
+  const hintAsSchedule: DateSchedule | null =
+    timeHint === null || timeHint === undefined || hintIsCovered
+      ? null
+      : {
+          ...timeHint,
+          label: options.timeText?.trim() || timeHint.label,
+          role: 'primary',
+        };
+
+  const primarySource = allCandidates.find(matchesHint) ?? hintAsSchedule ?? deadlineRanges[0] ??
     [...activityRanges, ...visitRanges, ...primaryCandidates].sort((a, b) => (a.start < b.start ? -1 : 1))[0];
   if (!primarySource) return [];
   const primary: DateSchedule = { ...primarySource, role: 'primary' };
@@ -616,10 +636,14 @@ export function buildSchedules(
         all.findIndex((other) => other.start === item.start && other.end === item.end) === index,
     );
 
+  // **主日程固定排第一**，其余按时间先后。
+  //
+  // 不按时间整体排序：`schedule` 字段就等于 `schedules[0]`，而它要作为卡片上的
+  // 「日程」标签与排序依据。按最早排序会让卡片标出次要日期——
+  // 图像采集通知的标签会变成 9-25（交表截止），而通知说的是 10-18 采集。
   if (extras.length === 0) return [primary];
-  const result = [primary, ...extras];
-  result.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
-  return result;
+  extras.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+  return [primary, ...extras];
 }
 
 /** 两条日程的区间是否真正重叠（含同一天） */

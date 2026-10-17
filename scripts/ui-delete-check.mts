@@ -259,20 +259,24 @@ async function measureTrackEndpoints(cdp: {
         }
       }
 
-      // 单日圆：必须与日期圆同宽、同心
+      // 单日安排：一条一列宽的跑道，宽度等于列宽、圆心与日期圆同心
       for (const span of document.querySelectorAll('[data-testid="calendar-span"].span--single')) {
         const track = span.querySelector('.span__track');
         const date = span.querySelector('.visually-hidden')?.textContent;
         if (!track || !date) continue;
-        const day = span.closest('[data-testid="calendar-week"]')?.querySelector('[data-date="' + date + '"]');
-        if (!day) continue;
+        const week = span.closest('[data-testid="calendar-week"]');
+        const day = week?.querySelector('[data-date="' + date + '"]');
+        const metrics = week ? metricsOf(week) : null;
+        if (!week || !day || !metrics) continue;
         const t = box(track);
         const d = box(day);
-        if (Math.abs(t.width - d.width) > 1) {
-          problems.push('单日圆的直径与日期圆不同：' + t.width.toFixed(1) + ' vs ' + d.width.toFixed(1));
+        // 从前单日是个 26px 圆点，圆里放不下字，日历上全是"没有内容的点"。
+        // 现在单日也是跑道、宽度跟列走——这条守住"别再缩回圆点"。
+        if (Math.abs(t.width - metrics.column) > 1.5) {
+          problems.push('单日跑道宽度 ' + t.width.toFixed(1) + 'px，应为列宽 ' + metrics.column.toFixed(1) + 'px');
         }
         if (Math.abs(t.x - d.x) > 1.5) {
-          problems.push('单日圆与日期圆不同心，偏 ' + (t.x - d.x).toFixed(2) + 'px');
+          problems.push('单日跑道与日期圆不同心，偏 ' + (t.x - d.x).toFixed(2) + 'px');
         }
       }
 

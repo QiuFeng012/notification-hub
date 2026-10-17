@@ -56,6 +56,13 @@ export function CardEditForm({ card, onSubmit, onCancel, onReExtract }: CardEdit
   // 重新提炼：粘贴的原文 + 提炼结果。draft 非空时展示逐项对比。
   const [pastedText, setPastedText] = useState('');
   const [draft, setDraft] = useState<ReExtractPreview | null>(null);
+  /**
+   * 用户采纳过的那份新原文（null 表示没采纳）。
+   *
+   * 保存时一并提交：排期是从原文解析的，只改时间不改原文，
+   * 新通知里的日期就进不了日历。
+   */
+  const [adoptedRawText, setAdoptedRawText] = useState<string | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
 
@@ -102,6 +109,10 @@ export function CardEditForm({ card, onSubmit, onCancel, onReExtract }: CardEdit
     if (field === 'keyPoints') {
       setKeyPoints(draft.keyPoints.length > 0 ? [...draft.keyPoints] : ['']);
     }
+    // 采纳任何一项，都说明"官方这份新通知我认了"——原文也随之替换。
+    // 不换原文的话，新通知里的日期（"检查时间改为10月29日"）永远进不了日历，
+    // 而时间字段已经改了，两边就对不上。
+    setAdoptedRawText(draft.rawText);
   }
 
   function applyAll() {
@@ -112,6 +123,7 @@ export function CardEditForm({ card, onSubmit, onCancel, onReExtract }: CardEdit
     setKeyPoints(draft.keyPoints.length > 0 ? [...draft.keyPoints] : ['']);
     // 把原文留一段在"补充说明"里，日后对账时知道这轮改的是哪份通知
     setNote(draft.rawText.slice(0, EDIT_MAX_NOTE_LENGTH));
+    setAdoptedRawText(draft.rawText);
   }
 
   function updatePoint(index: number, value: string) {
@@ -141,6 +153,8 @@ export function CardEditForm({ card, onSubmit, onCancel, onReExtract }: CardEdit
       time: time.trim().length > 0 ? time.trim() : null,
       source: source.trim().length > 0 ? source.trim() : null,
       keyPoints: meaningfulPoints.map((point) => point.trim()),
+      // 采纳过新原文就一并替换，让服务端按新文本重算排期
+      ...(adoptedRawText !== null ? { rawText: adoptedRawText } : {}),
       reason,
       ...(note.trim().length > 0 ? { note: note.trim() } : {}),
     };

@@ -210,8 +210,10 @@ if (Test-Path $stylesPath) {
     ($styles -match '(?s)\.span\s*\{[^}]*width:\s*100%')
   Check "跑道底色层左右不外扩（inset: 0）" `
     ($styles -match '(?s)\.span__track\s*\{[^}]*inset:\s*0;')
-  Check "单日日程收成与日期圆等大的圆" `
-    ($styles -match '(?s)\.span--single\s*\{[^}]*width:\s*26px')
+  # 单日安排曾经是个 26px 圆点，圆里放不下字，日历上全是"没有内容的点"。
+  # 现在单日也是一列宽的跑道、标题写在条内，所以这里断言它**不再**被缩成 26px。
+  Check "单日日程不再缩成没有文字的圆点" `
+    (-not ($styles -match '(?s)\.span--single\s*\{[^}]*width:\s*26px'))
 }
 
 # 真正执行每个脚本。语法解析查不出参数默认值这类运行时错误：

@@ -288,14 +288,15 @@ describe('区间：圆—矩形—圆', () => {
     expect(span.getAttribute('data-clipped')).toBe('false');
   });
 
-  it('单日安排是一个圆，且不在圆里塞字', async () => {
+  it('单日安排也把标题写在条内，不再是"没有内容的点"', async () => {
     await openCalendar([makeCard({ title: '单日安排', schedule: schedule('2025-03-06') })]);
     await screen.findByText('2025 年 3 月');
 
     const span = spansInWeek('2025-03-06')[0] as HTMLElement;
     expect(span.className).toContain('span--single');
-    // 26px 的圆里放标题只会溢出，标题交给 title 提示与「当天安排」列表
-    expect(span.querySelector('.span__content')).not.toBeNull();
+    // 从前单日是 26px 圆点，圆里放不下字，日历上只有"看得出有事、不知道什么事"。
+    // 现在单日也是一列宽的跑道，标题必须显示出来。
+    expect(span.querySelector('.span__label')?.textContent).toBe('单日安排');
     // 覆盖日期仍要能被读屏读到
     expect(span.querySelector('.visually-hidden')?.textContent).toBe('2025-03-06');
   });

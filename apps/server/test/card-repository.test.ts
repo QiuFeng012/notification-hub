@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict';
+﻿import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -378,7 +378,7 @@ describe('sqlite 仓储', () => {
       .prepare(`SELECT schedule_version FROM cards WHERE id = 'old'`)
       .get() as unknown as { schedule_version: number };
     inspect.close();
-    assert.equal(Number(row.schedule_version), 3, '重算后应记下当前解析版本');
+    assert.equal(Number(row.schedule_version), 4, '重算后应记下当前解析版本');
   });
 
   it('中文与换行内容不会损坏', () => {
@@ -694,5 +694,55 @@ describe('内存仓储', () => {
     assert.equal(repo.get(card.id)?.pinned, true);
     assert.equal(repo.setPinned(card.id, false)?.pinned, false);
     assert.equal(repo.setPinned('不存在', true), null);
+  });
+});
+
+describe('修改原文后排期随之更新', () => {
+  /**
+   * 真实缺陷：官方把检查时间从 10 月 22 日改到了 10 月 29 日，
+   * 用户只改了「时间」字段、没动原文，于是排期仍按旧原文算，
+   * 日历上只有旧的 10-20/10-22，新的 10-29 永远不出现。
+   */
+  it('传了新原文时，新文本里的日期会进排期', () => {
+    const repo = createMemoryCardRepository();
+    const card = makeCard({
+      rawText: '请于10月20号前交表。检查时间：10月22号。',
+      time: '10月22号',
+      schedules: [],
+      schedule: null,
+    });
+    repo.insert(card);
+
+    const updated = repo.update(
+      card.id,
+      {
+        time: '10月29号',
+        rawText: '请于10月20号前交表。检查时间改为：10月29号。',
+      },
+      'official',
+      '官方改期',
+    );
+
+    assert.equal(updated?.rawText.includes('10月29号'), true, '原文应被替换');
+    const starts = (updated?.schedules ?? []).map((item) => item.start);
+    assert.ok(starts.includes('2026-10-29'), `新日期应进排期，实际 ${JSON.stringify(starts)}`);
+    assert.equal(updated?.schedule?.start, '2026-10-29', '主日程应是时间字段指向的那天');
+  });
+
+  it('时间字段写了原文里没有的日期时，它仍是主日程', () => {
+    const repo = createMemoryCardRepository();
+    const card = makeCard({ rawText: '请于10月20号前交表。', time: '10月20号', schedules: [], schedule: null });
+    repo.insert(card);
+
+    const updated = repo.update(
+      card.id,
+      { rawText: '请于10月20号前交表。', time: '10月31号' },
+      'official',
+      null,
+    );
+
+    assert.equal(updated?.schedule?.start, '2026-10-31', '时间字段的日期必须成为主日程');
+    const starts = (updated?.schedules ?? []).map((item) => item.start);
+    assert.ok(starts.includes('2026-10-31'));
   });
 });
