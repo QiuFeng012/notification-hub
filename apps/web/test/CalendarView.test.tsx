@@ -841,8 +841,35 @@ describe('荧光笔颜色自定义', () => {
     );
   });
 
-  it('已单独指定过的卡片可以恢复默认', async () => {
-    const card = makeCard({ id: 'special-card', schedule: schedule('2025-03-06') });
+  it('改颜色后可以收起（不再没有关闭入口）', async () => {
+    await openCalendar([makeCard({ id: 'special-card', schedule: schedule('2025-03-06') })]);
+    await screen.findByText('2025 年 3 月');
+
+    await userEvent.click(document.querySelector('[data-date="2025-03-06"]') as HTMLElement);
+    const detail = await screen.findByTestId('calendar-detail');
+
+    // 点「改颜色」→ 按钮变成「收起颜色」，色盘出现
+    await userEvent.click(within(detail).getByRole('button', { name: '改颜色' }));
+    expect(within(detail).getByTestId('rgb-picker')).toBeInTheDocument();
+
+    // 再点「收起颜色」→ 色盘消失、按钮回到「改颜色」
+    await userEvent.click(within(detail).getByRole('button', { name: '收起颜色' }));
+    expect(within(detail).queryByTestId('rgb-picker')).not.toBeInTheDocument();
+    expect(within(detail).getByRole('button', { name: '改颜色' })).toBeInTheDocument();
+  });
+
+  it('颜色面板有 × 可以关闭', async () => {
+    await openCalendar([makeCard({ schedule: schedule('2025-03-06') })]);
+    await screen.findByText('2025 年 3 月');
+
+    await userEvent.click(screen.getByRole('button', { name: '荧光笔颜色' }));
+    expect(screen.getByTestId('calendar-colors')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: '关闭颜色面板' }));
+    expect(screen.queryByTestId('calendar-colors')).not.toBeInTheDocument();
+  });
+
+  it('已单独指定过的卡片可以恢复默认', async () => {    const card = makeCard({ id: 'special-card', schedule: schedule('2025-03-06') });
     const settings = makeSettings({
       highlight: { ...makeSettings().highlight, perCard: { 'special-card': '#7a5c8e' } },
     });

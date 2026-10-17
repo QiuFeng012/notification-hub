@@ -669,6 +669,37 @@ body {
   background: var(--bg-elevated);
 }
 
+/* 面板标题行：标题居左、× 关闭按钮居右 */
+.calendar__colors-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.calendar__colors-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.calendar__colors-close {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.calendar__colors-close:hover {
+  background: var(--border);
+  color: var(--text);
+}
+
 .calendar__colors-row {
   display: flex;
   align-items: center;

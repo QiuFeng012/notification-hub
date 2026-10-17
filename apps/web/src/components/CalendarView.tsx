@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import type {
   CardRevision,
   CardSchedule,
@@ -326,7 +326,18 @@ export function CalendarView({
       </div>
 
       {showColorPanel ? (
-        <div className="calendar__colors">
+        <div className="calendar__colors" data-testid="calendar-colors">
+          <div className="calendar__colors-head">
+            <span className="calendar__colors-title">荧光笔颜色</span>
+            <button
+              type="button"
+              className="calendar__colors-close"
+              aria-label="关闭颜色面板"
+              onClick={() => setShowColorPanel(false)}
+            >
+              ×
+            </button>
+          </div>
           <div className="calendar__colors-row">
             <span className="calendar__colors-label">单日</span>
             <button
@@ -608,6 +619,14 @@ export function CalendarView({
                       >
                         {showRawKey === key ? '收起原文' : '查看原文'}
                       </button>
+                      <button
+                        type="button"
+                        className="button button--ghost"
+                        aria-expanded={editingCardId === card.id}
+                        onClick={() => setEditingCardId((current) => (current === card.id ? null : card.id))}
+                      >
+                        {editingCardId === card.id ? '收起颜色' : '改颜色'}
+                      </button>
                       {editingCardId === card.id ? (
                         <RgbColorPicker
                           label="这条安排的颜色"
@@ -619,15 +638,7 @@ export function CalendarView({
                             })
                           }
                         />
-                      ) : (
-                        <button
-                          type="button"
-                          className="button button--ghost"
-                          onClick={() => setEditingCardId(card.id)}
-                        >
-                          改颜色
-                        </button>
-                      )}
+                      ) : null}
                       {editingCardId === card.id && highlight.perCard[card.id] ? (
                         <button
                           type="button"
