@@ -90,6 +90,15 @@ describe('GET /api/health', () => {
     assert.deepEqual(response.json(), { ok: true });
     await app.close();
   });
+
+  it('响应不缓存（Cache-Control: no-store）', async () => {
+    // 本地应用界面改得勤，浏览器缓存住旧 index.html/CSS 会让人以为代码没生效。
+    // 这是全局 onSend 钩子保证的：前端静态资源与 /api 都不缓存。
+    const { app } = await makeApp();
+    const response = await app.inject({ method: 'GET', url: '/api/health' });
+    assert.equal(response.headers['cache-control'], 'no-store');
+    await app.close();
+  });
 });
 
 describe('POST /api/cards', () => {

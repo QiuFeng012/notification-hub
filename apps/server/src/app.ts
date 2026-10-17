@@ -32,6 +32,19 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     bodyLimit: 2 * 1024 * 1024,
   });
 
+  // 本地应用不做任何缓存。
+  //
+  // 前端界面改得很勤：浏览器（尤其 --app 独立窗口与 PWA）会把旧的
+  // index.html / CSS / JS 缓存住，重新构建之后打开的还是旧界面，
+  // 而且旧得让人以为是代码没生效。服务端文件都在本机磁盘上，
+  // 每次重新发一份的代价约等于零，所以干脆 Cache-Control: no-store。
+  //
+  // 这条对 /api/ 也一样生效：缓存住的旧卡片数据比"连不上"更糟。
+  app.addHook('onSend', async (request, reply, payload) => {
+    reply.header('Cache-Control', 'no-store');
+    return payload;
+  });
+
   // 统一错误出口：把业务异常翻译成稳定的 { error: { code, message } } 结构
   app.setErrorHandler((error: unknown, _request, reply) => {
     if (error instanceof ValidationError) {
