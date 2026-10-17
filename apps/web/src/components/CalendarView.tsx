@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+﻿import { useMemo, useState } from 'react';
 import type {
   CardRevision,
+  CardSchedule,
   HighlightStyle,
   ReExtractPreview,
   ScheduleRole,
@@ -114,6 +115,15 @@ export function CalendarView({
     month: todayParts?.month ?? new Date().getMonth() + 1,
   }));
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  /**
+   * 刚点开的那一条日程（`cardId#index`）。
+   *
+   * 只用来把详情里对应的那一条高亮出来：点的是「活动 宿舍长大会」时，
+   * 详情列表里就该立刻看出是哪一条，而不是让人在几条同名卡片里对日期。
+   */
+  const [activeEntryKey, setActiveEntryKey] = useState<string | null>(null);
+  /** 正在展开原文的那一条（`cardId#index`），同一时刻只展开一条 */
+  const [showRawKey, setShowRawKey] = useState<string | null>(null);
   const [editingCardId, setEditingCardId] = useState<string | null>(null);
   /** 正在编辑详情的那张卡片（改标题/时间/要点） */
   const [editingDetailsId, setEditingDetailsId] = useState<string | null>(null);
@@ -166,10 +176,31 @@ export function CalendarView({
     [cards],
   );
 
-  /** 选中日期当天的安排 */
-  const selectedCards = useMemo(() => {
+  /**
+   * 选中日期当天的安排，**按日程逐条列**，而不是按卡片。
+   *
+   * 两个理由：
+   *   · 一张卡可能有多条日程（截止 + 活动），它们落在不同的日子。
+   *     从前只拿主日程去匹配，次要日程那天就"看得见条、点开却没有这条"；
+   *   · 同一天可能挤着好几件事，按日程列才能一件一条地列全。
+   */
+  const selectedEntries = useMemo(() => {
     if (!selectedDate) return [];
-    return cards.filter((card) => isDateInSchedule(selectedDate, card.schedule));
+    const entries: Array<{ card: CardView; schedule: CardSchedule; scheduleIndex: number; key: string }> = [];
+    for (const card of cards) {
+      card.schedules.forEach((schedule, scheduleIndex) => {
+        if (isDateInSchedule(selectedDate, schedule)) {
+          entries.push({ card, schedule, scheduleIndex, key: `${card.id}#${scheduleIndex}` });
+        }
+      });
+    }
+    // 先按这天是不是起点排（当天开始的排前面），再按标题稳定排序
+    return entries.sort((a, b) => {
+      const aStarts = a.schedule.start === selectedDate ? 0 : 1;
+      const bStarts = b.schedule.start === selectedDate ? 0 : 1;
+      if (aStarts !== bStarts) return aStarts - bStarts;
+      return a.card.title.localeCompare(b.card.title, 'zh-Hans-CN');
+    });
   }, [cards, selectedDate]);
 
   function go(delta: number) {
@@ -245,12 +276,14 @@ export function CalendarView({
           ['--span-ink' as string]: readableTextColor(color, 'var(--span-ink-dark)', 'var(--span-ink-light)'),
         }}
         title={`${span.card.title}${roleLabel ? `（${roleLabel}）` : ''}：${schedule?.label ?? ''}`}
-        onClick={() =>
-          setSelectedDate(
-            // 点区间时优先跳到区间的起始日；跨周延续过来的段则落在本周第一天
-            span.startsHere ? (schedule?.start ?? null) : (week.days[0]?.date ?? null),
-          )
-        }
+        onClick={() => {
+          // 点区间时优先跳到区间的起始日；跨周延续过来的段则落在本周第一天
+          const target = span.startsHere ? (schedule?.start ?? null) : (week.days[0]?.date ?? null);
+          setSelectedDate(target);
+          // 记住点的是哪一条，详情里把它高亮出来——
+          // 同一天可能有好几条，光看标题分不出点的是哪一条
+          setActiveEntryKey(`${span.card.id}#${span.scheduleIndex}`);
+        }}
       >
         {/* 跑道端头指向的那一天，供读屏理解这条覆盖哪几天 */}
         <span className="visually-hidden">
@@ -436,20 +469,23 @@ export function CalendarView({
       {selectedDate ? (
         <div className="calendar__detail" data-testid="calendar-detail">
           <h3 className="calendar__detail-title">{formatDateLabel(selectedDate)}</h3>
-          {selectedCards.length === 0 ? (
+          {selectedEntries.length === 0 ? (
             <p className="calendar__detail-empty">这天没有安排。</p>
           ) : (
             <ul className="calendar__detail-list">
-              {selectedCards.map((card) => {
-                const isMulti = (card.schedule?.dayCount ?? 1) >= 2;
-                const isFirstDay = card.schedule?.start === selectedDate;
-                const isLastDay = card.schedule?.end === selectedDate;
+              {selectedEntries.map(({ card, schedule, key }) => {
+                const isMulti = (schedule?.dayCount ?? 1) >= 2;
+                const isFirstDay = schedule?.start === selectedDate;
+                const isLastDay = schedule?.end === selectedDate;
                 const edited = card.revisionCount > 0;
+                // 同一张卡有多条日程时，每条都标出角色，才分得清是哪一件事
+                const roleLabel =
+                  card.schedules.length > 1 ? SCHEDULE_ROLE_LABELS[schedule?.role ?? 'primary'] : null;
 
                 // 正在改这张卡：整条换成编辑表单，避免"边看边改"时改错对象
                 if (editingDetailsId === card.id) {
                   return (
-                    <li key={card.id} className="calendar__detail-item calendar__detail-item--editing">
+                    <li key={key} className="calendar__detail-item calendar__detail-item--editing">
                       <CardEditForm
                         card={card}
                         onSubmit={async (patch) => {
@@ -465,19 +501,31 @@ export function CalendarView({
                 }
 
                 return (
-                  <li key={card.id} className="calendar__detail-item">
+                  <li
+                    key={key}
+                    className={
+                      activeEntryKey === key
+                        ? 'calendar__detail-item calendar__detail-item--active'
+                        : 'calendar__detail-item'
+                    }
+                    data-testid="calendar-detail-item"
+                    data-entry-key={key}
+                  >
                     <span
                       className="calendar__detail-dot"
                       style={{ background: resolveCardColor(card, styleForRender) }}
                       aria-hidden="true"
                     />
                     <div className="calendar__detail-body">
-                      <div className="calendar__detail-name">{card.title}</div>
+                      <div className="calendar__detail-name">
+                        {roleLabel ? <span className="span__role">{roleLabel}</span> : null}
+                        {card.title}
+                      </div>
                       <div className="calendar__detail-meta">
-                        {card.schedule?.label ? <span>{card.schedule.label}</span> : null}
+                        {schedule?.label ? <span>{schedule.label}</span> : null}
                         {isMulti ? (
                           <span className="calendar__detail-span">
-                            共 {card.schedule?.dayCount} 天
+                            共 {schedule?.dayCount} 天
                             {isFirstDay ? '（起始）' : ''}
                             {isLastDay && !isFirstDay ? '（结束）' : ''}
                           </span>
@@ -487,13 +535,44 @@ export function CalendarView({
                             已修改 {card.revisionCount} 次
                           </span>
                         ) : null}
-                        {card.schedule?.inferredYear ? (
+                        {schedule?.inferredYear ? (
                           <span className="calendar__detail-inferred">年份为推断所得</span>
                         ) : null}
                       </div>
+
+                      {/*
+                        点开一条日程时，这里要能直接看到"这件事到底是什么"。
+                        从前只有标题和一句原文片段，还得回卡片列表里翻。
+                        现在把来源、时间、要点一并列出；原文按需展开。
+                      */}
+                      <dl className="calendar__detail-fields">
+                        {card.time ? (
+                          <>
+                            <dt>时间</dt>
+                            <dd>{card.time}</dd>
+                          </>
+                        ) : null}
+                        {card.source ? (
+                          <>
+                            <dt>来源</dt>
+                            <dd>{card.source}</dd>
+                          </>
+                        ) : null}
+                      </dl>
+
+                      {card.keyPoints.length > 0 ? (
+                        <ul className="calendar__detail-points">
+                          {card.keyPoints.map((point, index) => (
+                            <li key={`${key}-point-${index}`}>{point}</li>
+                          ))}
+                        </ul>
+                      ) : null}
+
                       {historyCardId === card.id ? (
                         <RevisionHistory cardId={card.id} load={onLoadRevisions} onClear={onClearRevisions} />
                       ) : null}
+
+                      {showRawKey === key ? <pre className="card__raw">{card.rawText}</pre> : null}
                     </div>
 
                     <span className="calendar__detail-actions">
@@ -520,6 +599,15 @@ export function CalendarView({
                           {historyCardId === card.id ? '收起历史' : '改动历史'}
                         </button>
                       ) : null}
+                      <button
+                        type="button"
+                        className="button button--ghost"
+                        aria-expanded={showRawKey === key}
+                        onClick={() => setShowRawKey((current) => (current === key ? null : key))}
+                        aria-label={`查看原文：${card.title}`}
+                      >
+                        {showRawKey === key ? '收起原文' : '查看原文'}
+                      </button>
                       {editingCardId === card.id ? (
                         <RgbColorPicker
                           label="这条安排的颜色"

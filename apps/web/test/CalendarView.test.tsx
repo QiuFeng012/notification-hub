@@ -540,6 +540,63 @@ describe('点日期看当天安排', () => {
     expect(await screen.findByTestId('calendar-detail')).toHaveTextContent('这天没有安排');
   });
 
+  it('点日历上的事件条，能看到这件事的具体细节', async () => {
+    await openCalendar([
+      makeCard({
+        title: '选课安排',
+        time: '3月6日 14:00',
+        source: '教务处',
+        keyPoints: ['带学生证', '在 3 号楼集合'],
+        schedule: schedule('2025-03-06'),
+      }),
+    ]);
+    await screen.findByText('2025 年 3 月');
+
+    await userEvent.click(spansInWeek('2025-03-06')[0] as HTMLElement);
+
+    const detail = await screen.findByTestId('calendar-detail');
+    // 从前点开只有标题和一句原文片段，还得回卡片列表翻；
+    // 现在来源、时间、要点都在这里
+    expect(detail).toHaveTextContent('教务处');
+    expect(detail).toHaveTextContent('3月6日 14:00');
+    expect(detail).toHaveTextContent('带学生证');
+    expect(detail).toHaveTextContent('在 3 号楼集合');
+  });
+
+  it('点次要日程那天，也能看到这条日程（不再只看主日程）', async () => {
+    // 主日程是 3-05，第二条是 3-07。从前"当天安排"只拿主日程匹配，
+    // 3-07 那天看得见条、点开却什么都没有。
+    const primary = { ...schedule('2025-03-05'), role: 'deadline' as const };
+    const second = { ...schedule('2025-03-07'), role: 'activity' as const };
+    await openCalendar([
+      makeCard({ id: 'two', title: '两个时间', schedule: primary, schedules: [primary, second] }),
+    ]);
+    await screen.findByText('2025 年 3 月');
+
+    await userEvent.click(document.querySelector('[data-date="2025-03-07"]') as HTMLElement);
+
+    const detail = await screen.findByTestId('calendar-detail');
+    expect(detail).toHaveTextContent('两个时间');
+    expect(detail).toHaveTextContent('活动');
+  });
+
+  it('同一天有两件事时，两条都列出来', async () => {
+    await openCalendar([
+      makeCard({ id: 'a', title: '甲事', schedule: schedule('2025-03-06') }),
+      makeCard({ id: 'b', title: '乙事', schedule: schedule('2025-03-06') }),
+    ]);
+    await screen.findByText('2025 年 3 月');
+
+    await userEvent.click(document.querySelector('[data-date="2025-03-06"]') as HTMLElement);
+
+    await screen.findByTestId('calendar-detail');
+    const items = screen.getAllByTestId('calendar-detail-item');
+    expect(items).toHaveLength(2);
+    const text = items.map((item) => item.textContent ?? '').join('|');
+    expect(text).toContain('甲事');
+    expect(text).toContain('乙事');
+  });
+
   it('再次点击同一天收起详情', async () => {
     await openCalendar([makeCard({ schedule: schedule('2025-03-06') })]);
     await screen.findByText('2025 年 3 月');

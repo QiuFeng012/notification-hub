@@ -1126,14 +1126,68 @@ body {
 
 .calendar__detail-item {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
+  /* 条目之间留出间距：一条日程现在有好几行（要点、来源…），
+     挤在一起会看不出哪几行属于同一件事 */
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.calendar__detail-item:last-child {
+  border-bottom: none;
+}
+
+/**
+ * 刚点开的那一条。
+ *
+ * 同一天可能挤着好几件事，标题还可能一样（同一张卡的两条日程），
+ * 点完必须能一眼看出点的是哪一条。
+ */
+.calendar__detail-item--active {
+  margin: 4px -8px;
+  padding: 10px 8px;
+  border-bottom: none;
+  border-radius: var(--radius-sm);
+  background: var(--accent-fill);
+}
+
+.calendar__detail-fields {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+.calendar__detail-fields dt {
+  color: var(--text-dim);
+}
+
+.calendar__detail-fields dd {
+  margin: 0;
+  color: var(--text-body);
+  overflow-wrap: anywhere;
+}
+
+/* 要点：点开一条日程就能看到"到底要做什么"，不必回卡片列表 */
+.calendar__detail-points {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--text-body);
+  font-size: 12.5px;
+  line-height: 1.65;
+}
+
+.calendar__detail-points li + li {
+  margin-top: 2px;
 }
 
 .calendar__detail-dot {
   flex-shrink: 0;
   width: 10px;
   height: 10px;
+  margin-top: 5px;
   border-radius: 50%;
 }
 
