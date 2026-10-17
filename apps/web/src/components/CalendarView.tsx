@@ -31,16 +31,20 @@ const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
  * 日程角色的中文标签。
  *
  * 一条通知常常同时给"报名截止"和"活动开始"两个时间，日历上会画两条。
- * 两条颜色相同、日期相邻，没有标签就分不清哪条是哪个——
- * 而"哪天之前要交"和"哪天要去"是完全不同的两件事。
+ * 两条颜色相同，没有标签就分不清哪条是哪个——而"哪天之前要交"和
+ * "哪天要去"是完全不同的两件事。
  *
- * primary 不带标签：绝大多数通知只有一个时间，给它加个"主要"反而添乱。
+ * 用「截止」而不是「报名截止」：需要按时交的不只有报名，
+ * 还有"纸质缓检表交到值班台"这类，说"报名截止"会指错事。
+ *
+ * primary 的「主要」只在**多日期的卡片上**才显示（见 roleLabelOf）：
+ * 绝大多数通知只有一个时间，给它加个标签只是噪声。
  */
-const SCHEDULE_ROLE_LABELS: Record<ScheduleRole, string | null> = {
-  deadline: '报名截止',
+const SCHEDULE_ROLE_LABELS: Record<ScheduleRole, string> = {
+  deadline: '截止',
   activity: '活动',
   visit: '到场',
-  primary: null,
+  primary: '主要',
 };
 
 /**
@@ -209,11 +213,18 @@ export function CalendarView({
 
   function renderSpan(span: ScheduleSpan<CardView>, week: CalendarWeek<CardView>) {
     const color = resolveCardColor(span.card, styleForRender);
-    // 每条区间对应卡片上的第几条日程。一条通知可能同时有"报名截止"与"活动"，
+    // 每条区间对应卡片上的第几条日程。一条通知可能同时有"截止"与"活动"，
     // 两条都画出来、各自带标签，才分得清哪个是哪个。
     const schedule = span.card.schedules[span.scheduleIndex] ?? span.card.schedule;
     const isMulti = (schedule?.dayCount ?? 1) >= 2;
-    const roleLabel = SCHEDULE_ROLE_LABELS[schedule?.role ?? 'primary'];
+    /**
+     * 标签规则：**一张卡有多条日程时，每条都带标签**（含主日程）。
+     *
+     * 只有一条日程时不加标签：绝大多数通知就一个时间，
+     * 给它挂个「主要」只是噪声。
+     */
+    const hasSiblings = span.card.schedules.length > 1;
+    const roleLabel = hasSiblings ? SCHEDULE_ROLE_LABELS[schedule?.role ?? 'primary'] : null;
 
     return (
       <button

@@ -1,4 +1,4 @@
-﻿import assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   addDays,
@@ -382,8 +382,12 @@ describe('buildSchedules 多日程拆分', () => {
     });
 
     assert.equal(result.length, 2, `应是两条，实际 ${JSON.stringify(result)}`);
-    assert.equal(result[0]?.start, '2025-03-05');
-    assert.equal(result[1]?.start, '2025-03-08');
+    // 主日程固定排第一（= time 指向的那条），其余按时间先后
+    const starts = result.map((item) => item.start).sort();
+    assert.deepEqual(starts, ['2025-03-05', '2025-03-08']);
+    // 「3月8日24:00前完成」是截止，应带上截止角色（多日期卡片靠它区分两条）
+    const deadline = result.find((item) => item.start === '2025-03-08');
+    assert.equal(deadline?.role, 'deadline', `截止那条应判成 deadline，实际 ${deadline?.role}`);
   });
 
   it('同一件事被重复提到时并成一条', () => {

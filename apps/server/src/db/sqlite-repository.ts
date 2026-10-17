@@ -1,4 +1,4 @@
-import fs from 'node:fs';
+﻿import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type {
@@ -228,8 +228,11 @@ function rowToRevision(row: RevisionRow): CardRevision {
  * 4：主日程改为 time 指向的那一条，并保证它排在最前
  *    （原先取时间最早的一条：体检卡的时间写着 10-20，日程标签却显示 10-11；
  *     图像采集卡的时间写着 10-18，标签却显示 9-25 的交表截止）
+ * 5：角色判得更准（「日期 + 前」算截止；紧接的日期行继承上一句的角色——
+ *    只继承以「时间/截止」收尾的标题行，不继承任意上一句），
+ *    并且主日程不再被强制写成 primary——多日期卡片靠角色标签区分每一条
  */
-const SCHEDULE_VERSION = 4;
+const SCHEDULE_VERSION = 6;
 
 /**
  * 轻量迁移：给老数据库补上没有的列。

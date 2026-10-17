@@ -404,7 +404,7 @@ describe('区间：圆—矩形—圆', () => {
     expect(columns.size).toBe(2);
     // 角色标签要显示出来，否则两条颜色相同的条分不清谁是谁
     const labels = spans.map((span) => span.querySelector('.span__role')?.textContent);
-    expect(labels).toContain('报名截止');
+    expect(labels).toContain('截止');
     expect(labels).toContain('活动');
   });
 
@@ -414,6 +414,22 @@ describe('区间：圆—矩形—圆', () => {
     await screen.findByText('2025 年 3 月');
 
     expect(document.querySelector('.span__role')).toBeNull();
+  });
+
+  it('多日期卡片的主日程也带标签，两条才分得清', async () => {
+    // 主日程没有明显角色时显示「主要」，次要那条显示它的角色。
+    // 若主日程不带标签，日历上就是一条有字、一条没字，用户会以为第二条"多余"。
+    const primary = { ...schedule('2025-03-05'), role: 'primary' as const };
+    const visit = { ...schedule('2025-03-07'), role: 'visit' as const };
+    await openCalendar([
+      makeCard({ id: 'two-roles', title: '两个时间', schedule: primary, schedules: [primary, visit] }),
+    ]);
+    await screen.findByText('2025 年 3 月');
+
+    const labels = ([...document.querySelectorAll('[data-card-id="two-roles"]')] as HTMLElement[]).map(
+      (span) => span.querySelector('.span__role')?.textContent ?? null,
+    );
+    expect(labels).toEqual(['主要', '到场']);
   });
 });
 

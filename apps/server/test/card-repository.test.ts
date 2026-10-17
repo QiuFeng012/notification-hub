@@ -378,7 +378,7 @@ describe('sqlite 仓储', () => {
       .prepare(`SELECT schedule_version FROM cards WHERE id = 'old'`)
       .get() as unknown as { schedule_version: number };
     inspect.close();
-    assert.equal(Number(row.schedule_version), 4, '重算后应记下当前解析版本');
+    assert.equal(Number(row.schedule_version), 6, '重算后应记下当前解析版本');
   });
 
   it('中文与换行内容不会损坏', () => {

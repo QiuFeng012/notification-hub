@@ -387,9 +387,13 @@ const ACTIVITY_KEYWORDS = ['举行', '活动', '开始', '开放', '进行', '�
 /** 「到场」这一类：体检、检查、考试这类需要到场的安排 */
 const VISIT_KEYWORDS = ['体检', '检查', '考核', '考试', '面试', '采集'];
 
+/** 是否像"标题行"：以「时间/截止/日期」这类词收尾，如「⏰检查时间：」 */
+function isHeading(clause: string): boolean {
+  return /(时间|截止|日期|安排)\s*[：:]?\s*$/.test(clause.trim());
+}
+
 /** 某个小句里最靠后的关键词位置；没有则返回 -1 */
-function lastKeywordIndex(clause: string, keywords: string[]): number {
-  let best = -1;
+function lastKeywordIndex(clause: string, keywords: string[]): number {  let best = -1;
   for (const keyword of keywords) {
     const index = clause.lastIndexOf(keyword);
     if (index > best) best = index;
@@ -415,7 +419,20 @@ function classifyRole(clause: string, dateIndexInClause: number): ScheduleRole {
   if (deadline >= 0) candidates.push({ role: 'deadline', distance: Math.abs(deadline - dateIndexInClause) });
   if (activity >= 0) candidates.push({ role: 'activity', distance: Math.abs(activity - dateIndexInClause) });
   if (visit >= 0) candidates.push({ role: 'visit', distance: Math.abs(visit - dateIndexInClause) });
-  if (candidates.length === 0) return 'primary';
+  if (candidates.length === 0) {
+    /**
+     * 一条没有关键词时的兜底：**日期后面紧跟「前」就是截止**。
+     *
+     * 「10月20号（下周二）16：00前完成」「10月20号前交到值班台」这类句子
+     * 未必带"截止/提交"字样，但语义上就是"这天之前要办完"。
+     * 只在没有其他关键词时才用，避免抢走"活动时间"那类句子。
+     * 窗口给到 20 字：「10月20号（下周二）下午16：00前完成」里的「前」
+     * 离日期有十几个字，窗口太窄会漏掉——实测就漏过一次。
+     */
+    const after = clause.slice(dateIndexInClause, dateIndexInClause + 20);
+    if (/前/.test(after)) return 'deadline';
+    return 'primary';
+  }
   candidates.sort((a, b) => a.distance - b.distance);
   return candidates[0]?.role ?? 'primary';
 }
@@ -482,6 +499,18 @@ export function buildSchedules(
 
   // 第一层：逐句解析，每句一条候选（同句里的多个日期是"这件事的两端"，合到一条）
   const merged: DateSchedule[] = [];
+  /**
+   * 上一句若是"标题行"，记下它的角色供紧接的日期行继承。
+   *
+   * 通知里常见这种写法：
+   *     ⏰检查时间：
+   *      10月22号（第八周周四）
+   * 标题行本身没有日期，日期行本身没有关键词。两者合起来才是完整的一句话。
+   * **只认标题行**（以「时间/截止/日期」结尾的那种），不认任意上一句——
+   * 否则「…大会将于10月22日召开」会把后面无关的日期也染成"活动"，
+   * 实测出现过：卫检的「16:00前交表」被邻居的"活动"带跑。
+   */
+  let labelRole: ScheduleRole | null = null;
   for (const clause of splitClauses(raw)) {
     // 先归一化中文数字、再去掉防粘连的分隔符：
     // 「于3月5日」不能被换成「53月5日」，否则日期全读错
@@ -505,11 +534,19 @@ export function buildSchedules(
         inferred.push(true);
       }
     }
-    if (dates.length === 0) continue;
+    if (dates.length === 0) {
+      // 标题行：没有日期，但可能替下一句说明了这是什么时间
+      const heading = classifyRole(normalized, 0);
+      labelRole = isHeading(normalized) && heading !== 'primary' ? heading : null;
+      continue;
+    }
 
     // 角色取句内离第一个日期最近的那类关键词
     const first = collectExplicitDates(normalized, anchor)[0];
-    const role = classifyRole(normalized, first?.at ?? 0);
+    const own = classifyRole(normalized, first?.at ?? 0);
+    // 自己判不出来时，才借用紧邻的标题行；用完即清，不影响更远的句子
+    const role: ScheduleRole = own !== 'primary' ? own : (labelRole ?? 'primary');
+    labelRole = null;
     merged.push(toSchedule(dates, inferred, clause, role));
   }
   if (merged.length === 0) return [];
@@ -618,7 +655,14 @@ export function buildSchedules(
   const primarySource = allCandidates.find(matchesHint) ?? hintAsSchedule ?? deadlineRanges[0] ??
     [...activityRanges, ...visitRanges, ...primaryCandidates].sort((a, b) => (a.start < b.start ? -1 : 1))[0];
   if (!primarySource) return [];
-  const primary: DateSchedule = { ...primarySource, role: 'primary' };
+  /**
+   * 主日程**保留它原本判出的角色**，不再统一写成 `primary`。
+   *
+   * 从前这里强制改成 `primary`，结果是：一张卡有"截止"和"活动"两条时，
+   * 主日程那条的标签丢失，日历上两条只长得一样、分不清哪条是哪条。
+   * 现在"哪条是主日程"由数组位置表达（固定排第一），角色留给标签用。
+   */
+  const primary: DateSchedule = { ...primarySource };
 
   // 第二件及以后：与主日程指向同一段、或被主日程完全覆盖的都不再单列，
   // 否则日历上会出现两条完全重合的条。
