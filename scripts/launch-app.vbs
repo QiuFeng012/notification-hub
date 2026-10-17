@@ -1,17 +1,17 @@
-' 信息整合台 —— 无窗口启动包装器
+' Notification Hub - windowless launcher wrapper
 '
-' 为什么需要这一层：
-'   服务的 node 进程会继承调用方的控制台句柄。如果直接用
-'   powershell -WindowStyle Hidden 去启动启动器，Windows 会认为
-'   "父进程还有控制台子进程在跑"，于是父进程卡在创建进程那一步不返回，
-'   服务永远起不来。实测确认：Start-Process、cmd start /b、
-'   System.Diagnostics.Process 三种写法都一样卡。
+' Why this layer exists:
+'   The server's node process inherits the caller's console handles. Launching
+'   the launcher directly via "powershell -WindowStyle Hidden" makes Windows
+'   think the parent still has a console child running, so the parent hangs at
+'   process creation and the service never starts. Confirmed empirically:
+'   Start-Process, cmd start /b, and System.Diagnostics.Process all hang alike.
 '
-'   这个 VBScript 由 wscript 执行：它没有控制台可继承，
-'   而且 WScript.Shell.Run 是交给 Windows 去创建进程，
-'   所以启动器可以安安静静在后台把服务拉起来，不闪任何窗口。
+'   This VBScript runs under wscript, which has no console to inherit, and
+'   WScript.Shell.Run hands process creation to Windows, so the launcher can
+'   quietly bring up the service in the background without flashing a window.
 '
-' 用法（由桌面快捷方式调用，不直接双击）：
+' Usage (invoked by the desktop shortcut, not double-clicked directly):
 '   wscript.exe scripts\launch-app.vbs
 '
 Option Explicit
@@ -20,17 +20,18 @@ Dim shell, fso, baseDir, scriptPath, command
 Set shell = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
 
-' 本文件在 scripts\ 下，项目根目录是它的上一级
+' This file lives under scripts\, so the project root is its parent.
 baseDir = fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))
 scriptPath = fso.BuildPath(baseDir, "scripts\launch-app.ps1")
 
 If Not fso.FileExists(scriptPath) Then
-  MsgBox "找不到启动脚本：" & scriptPath, 16, "信息整合台"
+  MsgBox "Launch script not found: " & scriptPath, 16, "Notification Hub"
   WScript.Quit 1
 End If
 
 command = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File """ & scriptPath & """"
 
-' 0 = 隐藏窗口，False = 不等它结束。
-' 不等是必须的：启动器要用几秒钟等健康检查通过，包装器没必要陪它等。
+' 0 = hidden window, False = do not wait for it to finish.
+' Not waiting is required: the launcher takes a few seconds to pass its health
+' check, and this wrapper has no reason to wait for it.
 shell.Run command, 0, False

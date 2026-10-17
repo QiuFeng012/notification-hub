@@ -1,4 +1,4 @@
-<#
+﻿<#
   启动器脚本测试：校验各 .ps1 的语法，并确认它们能正常运行。
 
   为什么单独测：PowerShell 脚本的问题只会在双击时才暴露，
@@ -220,6 +220,28 @@ Check "start-server.ps1 用解析出的 node 而非 PATH 里的裸 node" `
   ($startScript -match '\$NodeExe')
 Check "package.json 锁 pnpm 版本（packageManager）" `
   ((Get-Content (Join-Path $repoRoot 'package.json') -Raw) -match 'packageManager')
+
+# 编码守卫：Windows PowerShell 5.1 在中文系统上按 GBK 读无 BOM 的 .ps1，
+# 中文全乱码、甚至把解析器弄崩（新机器实测：Unexpected token / Missing '}'）。
+# 含中文的 .ps1 必须带 UTF-8 BOM；.vbs 与 .bat 则干脆全 ASCII。
+$noBomChinese = @()
+foreach ($ps1 in Get-ChildItem $scriptsDir -Filter '*.ps1') {
+  $bytes = [System.IO.File]::ReadAllBytes($ps1.FullName)
+  $hasBom = ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)
+  $hasChinese = [System.Text.Encoding]::UTF8.GetString($bytes) -match '[\u4e00-\u9fff]'
+  if ($hasChinese -and -not $hasBom) { $noBomChinese += $ps1.Name }
+}
+Check "含中文的 .ps1 都带 UTF-8 BOM（否则新机器乱码崩溃）" ($noBomChinese.Count -eq 0) ($noBomChinese -join ', ')
+
+$nonAsciiBat = @()
+foreach ($bat in Get-ChildItem $repoRoot -Filter '*.bat') {
+  $text = [System.IO.File]::ReadAllText($bat.FullName)
+  if ($text -match '[\u4e00-\u9fff]') { $nonAsciiBat += $bat.Name }
+}
+Check ".bat 全 ASCII（cmd 按本地代码页读，中文会乱）" ($nonAsciiBat.Count -eq 0) ($nonAsciiBat -join ', ')
+
+$vbs = Get-Content (Join-Path $scriptsDir 'launch-app.vbs') -Raw
+Check "launch-app.vbs 全 ASCII（WSH 对 UTF-8 VBS 支持不稳）" ($vbs -notmatch '[\u4e00-\u9fff]')
 
 # 日历的星期表头与周行必须共用同一套盒子模型（左边界、宽度、列间距、内边距）。
 # 曾经它们各写各的：表头只有 gap，周行另加 padding 与边框，列宽差了 2.7px，
