@@ -13,6 +13,11 @@ export const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
 /** 时间轴刻度单位；只影响刻度与网格，不影响条的位置 */
 export type TimelineUnit = 'hour' | 'half-hour';
 
+/** 横轴刻度区高度；y 轴刻度的起点必须与它一致 */
+export const AXIS_HEIGHT = 28;
+/** 一个事件行的高度；y 轴刻度按它计算行中心 */
+export const ROW_HEIGHT = 48;
+
 /** 一条日程在选中日上的裁剪结果 */
 export interface DaySegment {
   /** 当天开始分钟，0–1440 */

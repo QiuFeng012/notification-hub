@@ -666,6 +666,29 @@ describe('点日期看当天安排', () => {
     expect(screen.getByTestId('calendar-detail-item')).toHaveClass('calendar__detail-item--active');
   });
 
+  it('点条后把高亮详情滚进可视区', async () => {
+    const scrollIntoView = vi.fn();
+    const original = HTMLElement.prototype.scrollIntoView;
+    HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    try {
+      await openCalendar([
+        makeCard({
+          title: '时间轴活动',
+          schedule: { ...schedule('2025-03-06'), startTime: '12:30', endTime: '17:30' },
+        }),
+      ]);
+      await screen.findByText('2025 年 3 月');
+      await userEvent.click(document.querySelector('[data-date="2025-03-06"]') as HTMLElement);
+
+      await userEvent.click(await screen.findByTestId('timeline-bar'));
+      await waitFor(() =>
+        expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' }),
+      );
+    } finally {
+      HTMLElement.prototype.scrollIntoView = original;
+    }
+  });
+
   it('没有时刻的旧卡在时间轴上显示全天', async () => {
     await openCalendar([makeCard({ title: '旧卡', schedule: schedule('2025-03-06') })]);
     await screen.findByText('2025 年 3 月');

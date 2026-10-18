@@ -9,8 +9,10 @@ import {
   formatDateLabel,
   formatSegment,
   scheduleSegmentOnDay,
+  AXIS_HEIGHT,
   HOUR_WIDTH,
   PLOT_WIDTH,
+  ROW_HEIGHT,
   type DaySegment,
   type TimelineUnit,
 } from '../lib/day-timeline';
@@ -39,7 +41,6 @@ interface TimelineRowData {
   segment: DaySegment;
 }
 
-const ROW_HEIGHT = 48;
 const SHORT_BAR_WIDTH = 110;
 
 function TimelineRow({
@@ -225,7 +226,8 @@ export function DayTimeline({
             <span
               key={row.entry.key}
               className="day-timeline__y-mark"
-              style={{ top: 28 + index * ROW_HEIGHT + ROW_HEIGHT / 2 }}
+              data-testid="timeline-y-mark"
+              style={{ top: AXIS_HEIGHT + index * ROW_HEIGHT + ROW_HEIGHT / 2 }}
             >
               -{index + 1}
             </span>
@@ -237,7 +239,7 @@ export function DayTimeline({
             <div
               className="day-timeline__axis"
               data-testid="timeline-axis"
-              style={{ backgroundSize: `${tickStep}px 100%` }}
+              style={{ height: AXIS_HEIGHT, backgroundSize: `${tickStep}px 100%` }}
             >
               <span className="visually-hidden">时间轴 0 点到 24 点</span>
               {ticks.map((tick) => (
@@ -249,12 +251,17 @@ export function DayTimeline({
                       : 'day-timeline__tick'
                   }
                   data-testid="timeline-tick"
+                  aria-hidden="true"
                   style={{ left: (tick.minutes / 60) * HOUR_WIDTH }}
                 >
                   {tick.label}
                 </span>
               ))}
-              <span className="day-timeline__axis-end" data-testid="timeline-axis-end">
+              <span
+                className="day-timeline__axis-end"
+                data-testid="timeline-axis-end"
+                aria-hidden="true"
+              >
                 24:00
               </span>
             </div>

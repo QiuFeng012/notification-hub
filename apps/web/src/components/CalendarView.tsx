@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   CardRevision,
   CardSchedule,
@@ -107,6 +107,14 @@ export function CalendarView({
    * 松手后才写入设置——否则拖一次会往接口打几十个请求。
    */
   const [previewColors, setPreviewColors] = useState<Record<string, string>>({});
+  /** 被时间轴选中的那条详情，用来把它滚进可视区 */
+  const activeDetailRef = useRef<HTMLLIElement | null>(null);
+
+  // 时间轴在上、详情在下；条多时点完条可能看不到高亮，所以把详情带进视野
+  useEffect(() => {
+    if (!activeEntryKey) return;
+    activeDetailRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeEntryKey]);
 
   /** 把预览色叠到已保存配置上，得到"当前该怎么画" */
   const styleForRender = useMemo(() => {
@@ -492,6 +500,7 @@ export function CalendarView({
                 return (
                   <li
                     key={key}
+                    ref={activeEntryKey === key ? activeDetailRef : undefined}
                     className={
                       activeEntryKey === key
                         ? 'calendar__detail-item calendar__detail-item--active'

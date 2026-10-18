@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_HIGHLIGHT_STYLE, type CardSchedule } from '@notification-hub/shared';
 import { DayTimeline, type TimelineEntry } from '../src/components/DayTimeline';
+import { AXIS_HEIGHT, ROW_HEIGHT } from '../src/lib/day-timeline';
 import type { CardView } from '../src/lib/card-view';
 
 function entry(overrides: Partial<CardSchedule> = {}, key = 'card#0'): TimelineEntry {
@@ -77,6 +78,24 @@ describe('DayTimeline', () => {
     expect(axis).toHaveTextContent('-2');
   });
 
+  it('刻度与右端标签对读屏隐藏', () => {
+    renderTimeline([entry({ startTime: '12:30' })]);
+    for (const tick of screen.getAllByTestId('timeline-tick')) {
+      expect(tick).toHaveAttribute('aria-hidden', 'true');
+    }
+    expect(screen.getByTestId('timeline-axis-end')).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('y 轴刻度落在每一行的中心', () => {
+    renderTimeline([
+      entry({ startTime: '09:00' }, 'a#0'),
+      entry({ startTime: '14:00' }, 'b#0'),
+    ]);
+    const marks = screen.getAllByTestId('timeline-y-mark');
+    expect(marks[0]?.style.top).toBe(`${AXIS_HEIGHT + ROW_HEIGHT / 2}px`);
+    expect(marks[1]?.style.top).toBe(`${AXIS_HEIGHT + ROW_HEIGHT + ROW_HEIGHT / 2}px`);
+  });
+
   it('单位切换只改刻度数量，不改变条位置', async () => {
     renderTimeline([entry({ startTime: '12:30', endTime: '17:30' })]);
     expect(screen.getAllByTestId('timeline-tick')).toHaveLength(24);
@@ -94,9 +113,26 @@ describe('DayTimeline', () => {
     expect(bar).toHaveTextContent('全天 · 时刻未识别');
   });
 
-  it('短条把标题放到条外', () => {
-    renderTimeline([entry({ startTime: '23:30', endTime: '23:45' })]);
-    expect(screen.getByTestId('timeline-bar-outside')).toHaveTextContent('测试活动');
+  it('短条把标题放到条外，且贴近右边缘时翻到左侧', async () => {
+    const { onSelect } = renderTimeline([entry({ startTime: '23:30', endTime: '23:45' })]);
+    const bar = screen.getByTestId('timeline-bar');
+    expect(bar.style.left).toBe('1692px');
+    expect(bar.style.width).toBe('18px');
+
+    const outside = screen.getByTestId('timeline-bar-outside');
+    expect(outside).toHaveTextContent('测试活动');
+    expect(outside.style.right).toBe('42px');
+    expect(outside.style.left).toBe('');
+
+    await userEvent.click(bar);
+    expect(onSelect).toHaveBeenCalledWith('card#0');
+  });
+
+  it('早间短条把标题放到条右侧', () => {
+    renderTimeline([entry({ startTime: '09:00', endTime: '09:15' })]);
+    const outside = screen.getByTestId('timeline-bar-outside');
+    expect(outside.style.left).toBe('672px');
+    expect(outside.style.right).toBe('');
   });
 
   it('点击条回传 key', async () => {
