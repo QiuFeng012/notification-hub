@@ -594,12 +594,16 @@ async function main(): Promise<void> {
   };
   check('切到设置页，地址栏同步', settings.hash === '#/settings', settings.hash);
   check('API 调用已经放进设置页', settings.hasKeyInput && settings.api.includes('API 调用'), settingsState);
-  // 「外观风格」已经实现，于是只剩「开机自启」还是占位
-  check('只剩「开机自启」还是占位', settings.planned === 1, `占位分组 ${settings.planned} 个`);
+  // 「开机自启」现在已经是真的开关，设置页上不该再有任何"待实现"占位
+  check('设置页不再有「待实现」占位', settings.planned === 0, `占位分组 ${settings.planned} 个`);
+  // 「系统」区确实渲染出了开机自启开关（role=switch）
   check(
-    '占位项明确标注了还没实现',
+    '设置页有真实的开机自启开关',
     await cdp.evaluate<boolean>(
-      `document.body.textContent.includes('待实现') && document.body.textContent.includes('没做的原因')`,
+      `(() => {
+        const sw = document.querySelector('[role="switch"]');
+        return Boolean(sw) && (sw.getAttribute('aria-label') || '').includes('开机自启');
+      })()`,
     ),
   );
 
