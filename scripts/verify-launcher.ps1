@@ -247,7 +247,10 @@ Check "存在 uninstall-cleaner.ps1" (Test-Path $cleaner)
 if (Test-Path $cleaner) {
   $cleanerSrc = Get-Content $cleaner -Raw
   Check "清理器会结束残留服务进程" ($cleanerSrc -match 'dist[\\/]index')
-  Check "清理器等待端口释放（不提前删目录）" ($cleanerSrc -match 'Get-NetTCPConnection|Start-Sleep')
+  Check "清理器等待端口释放（不提前删目录）" `
+    (($cleanerSrc -match 'Get-NetTCPConnection') -and ($cleanerSrc -match 'Start-Sleep'))
+  Check "清理器删除前切到项目目录之外（否则删不掉当前目录）" ($cleanerSrc -match 'SetCurrentDirectory')
+  Check "清理器删除前校验目标是本项目" ($cleanerSrc -match 'looksLikeRepo|pnpm-workspace\.yaml')
   Check "清理器复用 install-desktop-app 移除入口" ($cleanerSrc -match 'install-desktop-app\.ps1')
   Check "清理器复用 set-autostart 移除自启" ($cleanerSrc -match 'set-autostart\.ps1')
   Check "清理器删除整个项目目录" ($cleanerSrc -match 'Remove-Item \$RepoRoot')
@@ -483,11 +486,21 @@ if ($Functional) {
     New-Item -ItemType Directory -Path (Join-Path $tempRepo 'node_modules') -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $tempRepo '.git') -Force | Out-Null
     Set-Content -Path (Join-Path $tempRepo 'data\cards.db') -Value 'x'
+    # 目标必须“看起来像本项目”，清理器的安全闸门才肯删
+    Set-Content -Path (Join-Path $tempRepo 'package.json') -Value '{}'
 
+    # 复现生产形态：服务由 apps\server 启动，CWD 落在项目目录之内。
+    # 清理器若不在删除前切到项目外，Windows 会因“目录被占用”而删不掉。
+    # 这里直接用 Start-Process 指定 -WorkingDirectory（不经 Invoke-Capture 的包装脚本：
+    # 包装进程自己的 CWD 也会占住目录，那样测出来的失败不归清理器）。
+    $insideRepo = Join-Path $tempRepo 'apps\server'
+    New-Item -ItemType Directory -Path $insideRepo -Force | Out-Null
     Copy-Item -Path $cleaner -Destination $tempCleaner -Force
-    $clean = Invoke-Capture $tempCleaner @('-RepoRoot', $tempRepo)
-    Check "清理器正常退出" ($clean.Code -eq 0) "退出码 $($clean.Code)：$($clean.Output)"
-    Check "清理器删除了整个假仓库" (-not (Test-Path $tempRepo))
+    $cwdProc = Start-Process -FilePath 'powershell' `
+      -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$tempCleaner`"", '-RepoRoot', "`"$tempRepo`"") `
+      -WorkingDirectory $insideRepo -NoNewWindow -PassThru
+    [void]$cwdProc.WaitForExit(60000)
+    Check "CWD 在项目目录内时整目录被删" (-not (Test-Path $tempRepo))
 
     # 幂等：再复制一份、对已删目标重跑仍应退出 0
     Copy-Item -Path $cleaner -Destination $tempCleaner -Force

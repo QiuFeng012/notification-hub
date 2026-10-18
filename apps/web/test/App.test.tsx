@@ -212,7 +212,7 @@ describe('页面导航', () => {
     unmount();
 
     // 不设 hash 直接渲染，模拟刷新：应该还是设置页
-    render(<App api={createFakeApi()} settingsApi={createFakeSettingsApi()} />);
+    render(<App api={createFakeApi()} settingsApi={createFakeSettingsApi()} systemApi={createFakeSystemApi()} />);
     expect(await screen.findByRole('heading', { name: 'API 调用' })).toBeInTheDocument();
   });
 
@@ -227,7 +227,7 @@ describe('页面导航', () => {
 
   it('认不出来的 hash 回首页，而不是停在空白页', async () => {
     window.location.hash = '#/不存在的页面';
-    render(<App api={createFakeApi()} settingsApi={createFakeSettingsApi()} />);
+    render(<App api={createFakeApi()} settingsApi={createFakeSettingsApi()} systemApi={createFakeSystemApi()} />);
 
     expect(await screen.findByLabelText('通知原文')).toBeInTheDocument();
   });

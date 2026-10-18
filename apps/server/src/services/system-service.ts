@@ -62,7 +62,10 @@ export function createSystemService(options: SystemServiceOptions): SystemServic
     };
   }
 
-  /** 跑一个 PowerShell 脚本并等它结束；非零退出抛错 */
+  /** 单个脚本的最长等待时间：PowerShell 卡住时不能让 HTTP 请求永远挂着 */
+  const SCRIPT_TIMEOUT_MS = 30_000;
+
+  /** 跑一个 PowerShell 脚本并等它结束；非零退出或超时抛错 */
   function runScript(scriptPath: string, args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
       const child = spawnImpl(
@@ -70,11 +73,28 @@ export function createSystemService(options: SystemServiceOptions): SystemServic
         ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args],
         { windowsHide: true, stdio: 'ignore' },
       );
-      child.on('error', (error) => reject(error));
-      child.on('close', (code) => {
-        if (code === 0) resolve();
-        else reject(new SystemError('SCRIPT_FAILED', `脚本退出码 ${code}`));
-      });
+      let settled = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const finish = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        fn();
+      };
+      timer = setTimeout(() => {
+        try {
+          child.kill();
+        } catch {
+          // 进程可能已经退出
+        }
+        finish(() => reject(new SystemError('SCRIPT_TIMEOUT', `脚本超时（${SCRIPT_TIMEOUT_MS}ms）`)));
+      }, SCRIPT_TIMEOUT_MS);
+      child.on('error', (error) => finish(() => reject(error)));
+      child.on('close', (code) =>
+        finish(() =>
+          code === 0 ? resolve() : reject(new SystemError('SCRIPT_FAILED', `脚本退出码 ${code}`)),
+        ),
+      );
     });
   }
 
@@ -99,8 +119,20 @@ export function createSystemService(options: SystemServiceOptions): SystemServic
         copyFileSync(source, copy);
         const child = spawnImpl(
           'powershell.exe',
-          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', copy, '-RepoRoot', repoRoot],
-          { detached: true, stdio: 'ignore', windowsHide: true },
+          [
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-File',
+            copy,
+            '-RepoRoot',
+            repoRoot,
+            '-Port',
+            String(port),
+          ],
+          // cwd 必须在项目目录之外：Windows 不允许删除任何进程的当前目录，
+          // 而清理器要删的正是项目目录；漏了这个，卸载会「报成功却什么都没删」。
+          { detached: true, stdio: 'ignore', windowsHide: true, cwd: tmpDir },
         );
         child.on('error', () => {
           // detach 后不再关心它的结果；副本路径由清理器自己负责

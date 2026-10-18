@@ -148,13 +148,21 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
       return { autostart: status.autostart };
     });
 
-    // 先把 202 发出去再关闭：先关服务的话客户端拿不到响应。
-    app.post('/api/system/shutdown', async (_request, reply) => {
+    // 破坏性接口要求一个自定义请求头：跨站网页在 no-cors 下无法携带它，
+    // 带它又会触发预检，而服务端不响应 CORS 预检——于是 CSRF 式请求根本发不出去。
+    // 这是 spec §9「不做鉴权」之外的一道 CSRF 门槛，不是用户认证。
+    app.post('/api/system/shutdown', async (request, reply) => {
+      if (request.headers['x-notification-hub'] !== '1') {
+        return reply.code(403).send({ error: { code: 'FORBIDDEN', message: '缺少安全请求头' } });
+      }
       await reply.code(202).send({ shuttingDown: true });
       options.onShutdown?.();
     });
 
-    app.post('/api/system/uninstall', async (_request, reply) => {
+    app.post('/api/system/uninstall', async (request, reply) => {
+      if (request.headers['x-notification-hub'] !== '1') {
+        return reply.code(403).send({ error: { code: 'FORBIDDEN', message: '缺少安全请求头' } });
+      }
       await systemService.scheduleUninstall();
       await reply.code(202).send({ uninstalling: true });
       options.onUninstall?.();

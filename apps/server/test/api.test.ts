@@ -566,7 +566,27 @@ describe('POST /api/system/autostart', () => {
 });
 
 describe('POST /api/system/shutdown', () => {
-  it('返回 202 并触发 onShutdown', async () => {
+  it('带安全请求头时返回 202 并触发 onShutdown', async () => {
+    let shutdownCalled = false;
+    const { app } = await makeApp(stubSummarizer, null, {
+      systemService: fakeSystemService().service,
+      onShutdown: () => {
+        shutdownCalled = true;
+      },
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/system/shutdown',
+      headers: { 'x-notification-hub': '1' },
+    });
+
+    assert.equal(response.statusCode, 202);
+    assert.equal(response.json().shuttingDown, true);
+    assert.equal(shutdownCalled, true);
+    await app.close();
+  });
+
+  it('缺少安全请求头时拒绝（403），且不触发关闭', async () => {
     let shutdownCalled = false;
     const { app } = await makeApp(stubSummarizer, null, {
       systemService: fakeSystemService().service,
@@ -576,15 +596,37 @@ describe('POST /api/system/shutdown', () => {
     });
     const response = await app.inject({ method: 'POST', url: '/api/system/shutdown' });
 
-    assert.equal(response.statusCode, 202);
-    assert.equal(response.json().shuttingDown, true);
-    assert.equal(shutdownCalled, true);
+    assert.equal(response.statusCode, 403);
+    assert.equal(response.json().error.code, 'FORBIDDEN');
+    assert.equal(shutdownCalled, false);
     await app.close();
   });
 });
 
 describe('POST /api/system/uninstall', () => {
-  it('派发清理器、返回 202 并触发 onUninstall', async () => {
+  it('带安全请求头时派发清理器、返回 202 并触发 onUninstall', async () => {
+    const fake = fakeSystemService();
+    let uninstallCalled = false;
+    const { app } = await makeApp(stubSummarizer, null, {
+      systemService: fake.service,
+      onUninstall: () => {
+        uninstallCalled = true;
+      },
+    });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/system/uninstall',
+      headers: { 'x-notification-hub': '1' },
+    });
+
+    assert.equal(response.statusCode, 202);
+    assert.equal(response.json().uninstalling, true);
+    assert.equal(fake.calls.uninstall, 1);
+    assert.equal(uninstallCalled, true);
+    await app.close();
+  });
+
+  it('缺少安全请求头时拒绝（403），且不派发清理器', async () => {
     const fake = fakeSystemService();
     let uninstallCalled = false;
     const { app } = await makeApp(stubSummarizer, null, {
@@ -595,10 +637,9 @@ describe('POST /api/system/uninstall', () => {
     });
     const response = await app.inject({ method: 'POST', url: '/api/system/uninstall' });
 
-    assert.equal(response.statusCode, 202);
-    assert.equal(response.json().uninstalling, true);
-    assert.equal(fake.calls.uninstall, 1);
-    assert.equal(uninstallCalled, true);
+    assert.equal(response.statusCode, 403);
+    assert.equal(fake.calls.uninstall, 0);
+    assert.equal(uninstallCalled, false);
     await app.close();
   });
 });

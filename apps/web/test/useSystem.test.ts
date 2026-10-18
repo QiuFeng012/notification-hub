@@ -6,11 +6,7 @@ import type { SystemApi } from '../src/lib/api';
 function fakeApi(overrides: Partial<SystemApi> = {}): SystemApi {
   return {
     getSystem: vi.fn(async () => ({ autostart: false, port: 5178, dataDir: '/data' })),
-    setAutostart: vi.fn(async (enabled: boolean) => ({
-      autostart: enabled,
-      port: 5178,
-      dataDir: '/data',
-    })),
+    setAutostart: vi.fn(async (enabled: boolean) => ({ autostart: enabled })),
     shutdown: vi.fn(async () => undefined),
     uninstall: vi.fn(async () => undefined),
     ...overrides,
@@ -28,7 +24,7 @@ describe('useSystem', () => {
     expect(result.current.system).toEqual({ autostart: false, port: 5178, dataDir: '/data' });
   });
 
-  it('toggleAutostart 取反并更新状态', async () => {
+  it('toggleAutostart 取反并只更新 autostart，不抹掉端口与数据目录', async () => {
     const api = fakeApi();
     const { result } = renderHook(() => useSystem(api));
     await waitFor(() => expect(result.current.loading).toBe(false));
@@ -38,7 +34,23 @@ describe('useSystem', () => {
     });
 
     expect(api.setAutostart).toHaveBeenCalledWith(true);
-    expect(result.current.system?.autostart).toBe(true);
+    // 接口只回 { autostart }，合并时必须保留 port/dataDir
+    expect(result.current.system).toEqual({ autostart: true, port: 5178, dataDir: '/data' });
+  });
+
+  it('shutdown 成功后调用 window.close 关掉 --app 窗口', async () => {
+    const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {});
+    const api = fakeApi();
+    const { result } = renderHook(() => useSystem(api));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.shutdown();
+    });
+
+    expect(result.current.finishing).toBe('shutdown');
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    closeSpy.mockRestore();
   });
 
   it('uninstall 成功后标记 finishing', async () => {

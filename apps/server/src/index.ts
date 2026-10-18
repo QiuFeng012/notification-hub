@@ -49,8 +49,18 @@ let app!: Awaited<ReturnType<typeof buildApp>>;
 function scheduleClose(): void {
   setTimeout(() => {
     // 兜底：万一 close 被残留连接拖住，最多等 3 秒也强制退出
-    setTimeout(() => process.exit(0), 3000);
-    void app.close().finally(() => process.exit(0));
+    const fallback = setTimeout(() => process.exit(0), 3000);
+    void app.close().then(
+      () => {
+        clearTimeout(fallback);
+        process.exit(0);
+      },
+      (error: unknown) => {
+        clearTimeout(fallback);
+        app.log.error(error);
+        process.exit(1);
+      },
+    );
   }, 50);
 }
 

@@ -299,9 +299,13 @@ export function createSettingsApi(): SettingsApi {
   };
 }
 
+export interface SetAutostartResult {
+  autostart: boolean;
+}
+
 export interface SystemApi {
   getSystem(): Promise<SystemView>;
-  setAutostart(enabled: boolean): Promise<SystemView>;
+  setAutostart(enabled: boolean): Promise<SetAutostartResult>;
   shutdown(): Promise<void>;
   uninstall(): Promise<void>;
 }
@@ -316,6 +320,15 @@ export function toSystemView(input: unknown): SystemView {
   };
 }
 
+/** 归一化「切换自启」的响应：它只含 autostart，绝不冒充完整 SystemView */
+export function toSetAutostartResult(input: unknown): SetAutostartResult {
+  const record = (typeof input === 'object' && input !== null ? input : {}) as { autostart?: unknown };
+  return { autostart: record.autostart === true };
+}
+
+/** 破坏性接口必须带的自定义头（服务端据此挡住 CSRF 式的跨站请求） */
+const SAFE_HEADER = { 'x-notification-hub': '1' } as const;
+
 export function createSystemApi(): SystemApi {
   return {
     async getSystem() {
@@ -323,17 +336,17 @@ export function createSystemApi(): SystemApi {
     },
 
     async setAutostart(enabled: boolean) {
-      return toSystemView(
+      return toSetAutostartResult(
         await requestJson('/api/system/autostart', { method: 'POST', json: { enabled } }),
       );
     },
 
     async shutdown() {
-      await requestJson('/api/system/shutdown', { method: 'POST' });
+      await requestJson('/api/system/shutdown', { method: 'POST', headers: { ...SAFE_HEADER } });
     },
 
     async uninstall() {
-      await requestJson('/api/system/uninstall', { method: 'POST' });
+      await requestJson('/api/system/uninstall', { method: 'POST', headers: { ...SAFE_HEADER } });
     },
   };
 }

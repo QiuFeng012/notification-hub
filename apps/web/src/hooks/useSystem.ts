@@ -23,6 +23,15 @@ function toMessage(error: unknown): string {
   return '发生未知错误';
 }
 
+/** 关闭自己这个 --app 窗口；浏览器可能拒绝（非脚本打开的窗口），关不掉也不影响服务已退出 */
+function closeAppWindow(): void {
+  try {
+    window.close();
+  } catch {
+    // 忽略：用户手动关窗口即可
+  }
+}
+
 /**
  * 设置页「系统」区状态：自启开关、关闭、卸载。
  *
@@ -61,7 +70,8 @@ export function useSystem(api: SystemApi): UseSystemResult {
     setError(null);
     try {
       const next = await api.setAutostart(!system.autostart);
-      setSystem(next);
+      // 只更新 autostart：接口只回这一个字段，整体替换会把 port/dataDir 抹成默认值
+      setSystem((prev) => (prev ? { ...prev, autostart: next.autostart } : prev));
     } catch (caught) {
       setError(toMessage(caught));
     } finally {
@@ -76,6 +86,7 @@ export function useSystem(api: SystemApi): UseSystemResult {
     try {
       await api.shutdown();
       setFinishing('shutdown');
+      closeAppWindow();
     } catch (caught) {
       setError(toMessage(caught));
     } finally {

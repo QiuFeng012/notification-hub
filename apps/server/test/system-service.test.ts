@@ -38,6 +38,7 @@ function fakeSpawn(record: SpawnRecord): typeof import('node:child_process').spa
         (listeners[event] ??= []).push(cb);
         return child;
       },
+      kill() {},
       unref() {},
     };
     setImmediate(() => {
@@ -155,6 +156,9 @@ describe('system-service scheduleUninstall', () => {
     assert.ok(record.args?.includes('-File'), 'powershell 应带 -File');
     assert.ok(record.args?.includes(script), '应执行复制后的脚本');
     assert.ok(record.args?.includes('-RepoRoot'), '应带 -RepoRoot');
+    assert.ok(record.args?.includes('-Port'), '应带 -Port（端口不是固定的 5178）');
     assert.equal(record.opts?.detached, true, '应为独立进程');
+    // Windows 不允许删除任何进程的当前目录；cwd 落在项目目录内会让卸载失败
+    assert.equal(record.opts?.cwd, tmpDir, 'cwd 必须在项目目录之外');
   });
 });

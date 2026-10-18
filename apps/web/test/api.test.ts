@@ -213,7 +213,7 @@ describe('createSystemApi.setAutostart', () => {
 });
 
 describe('createSystemApi.shutdown / uninstall', () => {
-  it('shutdown POST 不带 body 与 Content-Type', async () => {
+  it('shutdown POST 带安全头、不带 body 与 Content-Type', async () => {
     const spy = mockFetch(() => new Response(null, { status: 202 }));
     await createSystemApi().shutdown();
 
@@ -222,13 +222,17 @@ describe('createSystemApi.shutdown / uninstall', () => {
     expect(init?.method).toBe('POST');
     expect(init?.body).toBeUndefined();
     expect((init?.headers as Record<string, string>)?.['Content-Type']).toBeUndefined();
+    expect((init?.headers as Record<string, string>)?.['x-notification-hub']).toBe('1');
   });
 
-  it('uninstall POST /api/system/uninstall', async () => {
+  it('uninstall POST /api/system/uninstall 且带安全头', async () => {
     const spy = mockFetch(() => new Response(null, { status: 202 }));
     await createSystemApi().uninstall();
 
     expect(spy.mock.calls[0]?.[0]).toBe('/api/system/uninstall');
     expect(spy.mock.calls[0]?.[1]?.method).toBe('POST');
+    expect(
+      (spy.mock.calls[0]?.[1]?.headers as Record<string, string>)?.['x-notification-hub'],
+    ).toBe('1');
   });
 });

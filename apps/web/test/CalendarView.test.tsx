@@ -15,6 +15,14 @@ import { PAGE_HASHES } from '../src/lib/route';
 
 const TODAY = '2025-03-05';
 
+/** 日历用例不关心系统区；给一个稳定替身，避免 useSystem 真的去 fetch('/api/system') */
+const fakeSystemApi = {
+  getSystem: async () => ({ autostart: false, port: 5178, dataDir: '/data' }),
+  setAutostart: async (enabled: boolean) => ({ autostart: enabled }),
+  shutdown: async () => undefined,
+  uninstall: async () => undefined,
+};
+
 function dayCountOf(start: string, end: string): number {
   return Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86_400_000) + 1;
 }
@@ -118,7 +126,7 @@ function makeApis(
 /** 日历属于信息卡收集页，所以先把地址栏设到那一页再渲染 */
 function renderCardsApp(cardApi: CardApi, settingsApi: SettingsApi) {
   window.location.hash = PAGE_HASHES.cards;
-  return render(<App api={cardApi} settingsApi={settingsApi} today={TODAY} />);
+  return render(<App api={cardApi} settingsApi={settingsApi} today={TODAY} systemApi={fakeSystemApi} />);
 }
 
 async function openCalendar(
@@ -265,7 +273,7 @@ describe('圆形日期与周排版', () => {
   it('闰年 2 月排 29 天', async () => {
     const { cardApi, settingsApi } = makeApis([]);
     window.location.hash = PAGE_HASHES.cards;
-    render(<App api={cardApi} settingsApi={settingsApi} today="2024-02-10" />);
+    render(<App api={cardApi} settingsApi={settingsApi} today="2024-02-10" systemApi={fakeSystemApi} />);
     await userEvent.click(await screen.findByRole('tab', { name: '日历视图' }));
 
     expect(screen.getAllByTestId('calendar-day')).toHaveLength(29);
@@ -481,7 +489,7 @@ describe('未排期与空态', () => {
       deleteCard: vi.fn(async () => undefined),
     };
     window.location.hash = PAGE_HASHES.cards;
-    render(<App api={cardApi} settingsApi={makeApis([]).settingsApi} today={TODAY} />);
+    render(<App api={cardApi} settingsApi={makeApis([]).settingsApi} today={TODAY} systemApi={fakeSystemApi} />);
     await userEvent.click(await screen.findByRole('tab', { name: '日历视图' }));
 
     expect(screen.getByRole('status')).toHaveTextContent('正在读取历史信息卡…');

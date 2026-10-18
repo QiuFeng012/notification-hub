@@ -43,6 +43,13 @@ Write-Host ""
 Write-Host "  信息整合台 —— 卸载清理" -ForegroundColor Cyan
 Write-Host "  ----------------------------------------"
 
+# 关键：清理器可能被以「项目目录之内」的 CWD 拉起（服务由 apps\server 启动），
+# 而 Windows 不允许删除任何进程的当前目录。注意 PowerShell 5.1 的 Set-Location
+# 只改 PowerShell 位置、不改 OS 层 CWD（实测 GetCurrentDirectory 仍是旧目录），
+# 所以必须显式调用 .NET 的 SetCurrentDirectory 才能真的离开项目目录。
+[System.IO.Directory]::SetCurrentDirectory($env:TEMP)
+Set-Location $env:TEMP
+
 # 1. 兜底结束残留的服务进程（只杀本项目 dist/index.js 的 node）
 $targets = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
   Where-Object { $_.CommandLine -match 'dist[\\/]index\.js' })
@@ -69,19 +76,35 @@ if ($released) {
 # 3. 移除桌面/开始菜单入口（复用现成的路径解析）
 $desktopUninstall = Join-Path $RepoRoot 'scripts\install-desktop-app.ps1'
 if (Test-Path $desktopUninstall) {
-  try { & $desktopUninstall -Uninstall | Out-Null } catch { }
-  Write-Host "  [OK] 已清理桌面/开始菜单入口" -ForegroundColor Green
+  try {
+    & $desktopUninstall -Uninstall | Out-Null
+    Write-Host "  [OK] 已清理桌面/开始菜单入口" -ForegroundColor Green
+  } catch {
+    Write-Host "  [!] 清理桌面/开始菜单入口失败：$($_.Exception.Message)" -ForegroundColor Yellow
+  }
 }
 
 # 4. 移除开机自启动入口
 $autostartUninstall = Join-Path $RepoRoot 'scripts\set-autostart.ps1'
 if (Test-Path $autostartUninstall) {
-  try { & $autostartUninstall -Disable -RepoRoot $RepoRoot | Out-Null } catch { }
-  Write-Host "  [OK] 已清理开机自启动入口" -ForegroundColor Green
+  try {
+    & $autostartUninstall -Disable -RepoRoot $RepoRoot | Out-Null
+    Write-Host "  [OK] 已清理开机自启动入口" -ForegroundColor Green
+  } catch {
+    Write-Host "  [!] 清理开机自启动入口失败：$($_.Exception.Message)" -ForegroundColor Yellow
+  }
 }
 
 # 5. 删除整个项目目录
 if (Test-Path $RepoRoot) {
+  # 不可逆递归删除，先确认目标确实像本项目，避免调用方传错路径时误删
+  $fullRoot = [System.IO.Path]::GetFullPath($RepoRoot)
+  $isDriveRoot = ($fullRoot -match '^[A-Za-z]:\\?$')
+  $looksLikeRepo = (Test-Path (Join-Path $RepoRoot 'package.json')) -or (Test-Path (Join-Path $RepoRoot 'pnpm-workspace.yaml'))
+  if ($isDriveRoot -or -not $looksLikeRepo) {
+    Write-Host "  [X] 目标目录不像本项目：$RepoRoot，拒绝删除" -ForegroundColor Red
+    exit 1
+  }
   try {
     Remove-Item $RepoRoot -Recurse -Force -ErrorAction Stop
     Write-Host "  [OK] 已删除项目目录 $RepoRoot" -ForegroundColor Green

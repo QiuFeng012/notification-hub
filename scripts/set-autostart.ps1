@@ -47,11 +47,6 @@ Write-Host ""
 Write-Host "  信息整合台 —— 开机自启动" -ForegroundColor Cyan
 Write-Host "  ----------------------------------------"
 
-if (-not (Test-Path $launchWrapper)) {
-  Write-Host "  [X] 找不到无窗口包装器：$launchWrapper" -ForegroundColor Red
-  exit 1
-}
-
 # 图标不存在就退回 PowerShell 自带图标，而不是让 Windows 显示空白方块
 $iconLocation = "$env:SystemRoot\System32\shell32.dll,13"
 if (Test-Path $iconFile) {
@@ -70,6 +65,11 @@ if ($Disable -and -not $Enable) {
 }
 
 # -Enable（或两者都给时 -Enable 优先）
+# 包装器检查只在启用时做：-Disable 不需要 vbs 存在，否则自启关不掉。
+if (-not (Test-Path $launchWrapper)) {
+  Write-Host "  [X] 找不到无窗口包装器：$launchWrapper" -ForegroundColor Red
+  exit 1
+}
 try {
   if (-not (Test-Path $StartupDir)) { New-Item -ItemType Directory -Path $StartupDir -Force | Out-Null }
   $shell = New-Object -ComObject WScript.Shell
