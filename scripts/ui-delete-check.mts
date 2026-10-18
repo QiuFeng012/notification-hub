@@ -285,6 +285,40 @@ async function measureTrackEndpoints(cdp: {
   `);
 }
 
+async function measureDayTimeline(cdp: {
+  evaluate<T>(expression: string): Promise<T>;
+}): Promise<string[]> {
+  return cdp.evaluate<string[]>(`
+    (() => {
+      const timeline = document.querySelector('[data-testid="day-timeline"]');
+      if (!timeline) return ['没有打开日期时间轴'];
+      const axis = timeline.querySelector('[data-testid="timeline-axis"]');
+      const bars = [...timeline.querySelectorAll('[data-testid="timeline-bar"]')];
+      if (!axis) return ['时间轴缺少坐标轴'];
+      if (bars.length === 0) return ['时间轴没有事件条'];
+
+      const problems = [];
+      const axisBox = axis.getBoundingClientRect();
+      if (axisBox.width < 1720) {
+        problems.push('坐标轴宽度 ' + axisBox.width.toFixed(1) + 'px，应接近 1728px');
+      }
+      const bar = bars[0];
+      const barBox = bar.getBoundingClientRect();
+      const start = Number(bar.dataset.startMin);
+      const end = Number(bar.dataset.endMin);
+      const expectedLeft = axisBox.left + start / 60 * 72;
+      const expectedWidth = Math.max(10, (end - start) / 60 * 72);
+      if (Math.abs(barBox.left - expectedLeft) > 2) {
+        problems.push('条左端偏离 ' + (barBox.left - expectedLeft).toFixed(1) + 'px');
+      }
+      if (Math.abs(barBox.width - expectedWidth) > 2) {
+        problems.push('条宽度 ' + barBox.width.toFixed(1) + 'px，应为 ' + expectedWidth.toFixed(1) + 'px');
+      }
+      return problems;
+    })()
+  `);
+}
+
 const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'notification-hub-ui-'));const browser = spawn(
   browserPath,
   [
@@ -683,7 +717,7 @@ async function main(): Promise<void> {
       const textarea = document.querySelector('#raw-text');
       if (!textarea) return '首页找不到输入框';
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set;
-      setter.call(textarea, '【界面验证】请于3月8日24:00前提交报名表，逾期不再受理。');
+      setter.call(textarea, '【界面验证】今天14:30-16:00参加界面验证活动，3月8日24:00前提交报名表。');
       textarea.dispatchEvent(new Event('input', { bubbles: true }));
       await new Promise((resolve) => setTimeout(resolve, 50));
       document.querySelector('.button--primary').click();
@@ -726,6 +760,76 @@ async function main(): Promise<void> {
   check('能定位到刚生成的卡片', typeof newId === 'string' && newId.length > 0, `实际 ${String(newId)}`);
 
   const selector = `[data-card-id="${newId}"]`;
+
+  console.log('4b. 日期时间轴：点日期、条位置与单位切换');
+  check('切到「日历视图」', await cdp.evaluate<boolean>(`
+    (() => {
+      const tab = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('日历视图'));
+      if (!tab) return false;
+      tab.click();
+      return true;
+    })()
+  `));
+  await sleep(800);
+
+  const opened = await cdp.evaluate<boolean>(`
+    (() => {
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const today = now.getFullYear() + '-' + pad(now.getMonth() + 1) + '-' + pad(now.getDate());
+      const circle = document.querySelector('[data-date="' + today + '"]');
+      if (!circle) return false;
+      circle.click();
+      return true;
+    })()
+  `);
+  check('能点开今天的日期', opened);
+  await sleep(600);
+  check(
+    '今天的时间轴已渲染',
+    await cdp.evaluate<boolean>(`Boolean(document.querySelector('[data-testid="day-timeline"]'))`),
+  );
+
+  const timelineProblems = await measureDayTimeline(cdp);
+  check('时间轴的轴宽与条位置正确', timelineProblems.length === 0, timelineProblems.join('；'));
+
+  const ticksBefore = await cdp.evaluate<number>(
+    `document.querySelectorAll('[data-testid="timeline-tick"]').length`,
+  );
+  check('1 小时单位有 24 个刻度', ticksBefore === 24, String(ticksBefore));
+  check('能点「30 分钟」', await cdp.evaluate<boolean>(`
+    (() => {
+      const button = [...document.querySelectorAll('button')].find((el) => el.textContent?.trim() === '30 分钟');
+      if (!button) return false;
+      button.click();
+      return true;
+    })()
+  `));
+  await sleep(200);
+  const ticksAfter = await cdp.evaluate<number>(
+    `document.querySelectorAll('[data-testid="timeline-tick"]').length`,
+  );
+  check('30 分钟单位有 48 个刻度', ticksAfter === 48, String(ticksAfter));
+
+  check('点时间轴上的条能高亮详情', await cdp.evaluate<boolean>(`
+    (async () => {
+      const bar = document.querySelector('[data-testid="timeline-bar"]');
+      if (!bar) return false;
+      bar.click();
+      return Boolean(await window.__waitFor(() => document.querySelector('.calendar__detail-item--active')));
+    })()
+  `));
+
+  // 回到列表，继续后面的置顶 / 删除流程
+  check('切回「卡片列表」', await cdp.evaluate<boolean>(`
+    (() => {
+      const tab = [...document.querySelectorAll('button')].find((el) => el.textContent?.includes('卡片列表'));
+      if (!tab) return false;
+      tab.click();
+      return true;
+    })()
+  `));
+  await sleep(600);
 
   console.log('5. 点击新卡片上的「置顶」按钮');
   const pinResult = await cdp.evaluate<string>(`

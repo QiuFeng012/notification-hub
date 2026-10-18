@@ -1,4 +1,4 @@
-﻿import fs from 'node:fs';
+import fs from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import type {
@@ -127,6 +127,20 @@ function parseKeywords(raw: string | null | undefined): CardKeywords {
   }
 }
 
+/** 把库里存的 HH:mm 归一化；start 不接受 24:00，end 接受 */
+function normalizeStoredClock(value: unknown, allowEndOfDay: boolean): string | null {
+  if (typeof value !== 'string') return null;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value);
+  if (!match?.[1] || !match[2]) return null;
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+  if (minute < 0 || minute > 59) return null;
+  if (hour === 24 && minute === 0) return allowEndOfDay ? '24:00' : null;
+  if (hour < 0 || hour > 23) return null;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
 /** 解析数据库里存的日程 JSON，缺失或损坏时返回 null */
 function parseStoredSchedule(raw: string | null | undefined): CardSchedule | null {
   if (!raw) return null;
@@ -135,6 +149,8 @@ function parseStoredSchedule(raw: string | null | undefined): CardSchedule | nul
     if (typeof parsed !== 'object' || parsed === null) return null;
     const record = parsed as Record<string, unknown>;
     if (typeof record.start !== 'string' || typeof record.end !== 'string') return null;
+    const startTime = normalizeStoredClock(record.startTime, false);
+    const rawEndTime = normalizeStoredClock(record.endTime, true);
     return {
       start: record.start,
       end: record.end,
@@ -142,6 +158,9 @@ function parseStoredSchedule(raw: string | null | undefined): CardSchedule | nul
       label: typeof record.label === 'string' ? record.label : '',
       inferredYear: record.inferredYear === true,
       ...(isScheduleRole(record.role) ? { role: record.role } : {}),
+      ...(startTime ? { startTime } : {}),
+      // 结束早于开始说明这条排期是坏的；按「只有起始」处理，不画负宽度
+      ...(rawEndTime && (!startTime || rawEndTime >= startTime) ? { endTime: rawEndTime } : {}),
     };
   } catch {
     return null;
@@ -231,8 +250,9 @@ function rowToRevision(row: RevisionRow): CardRevision {
  * 5：角色判得更准（「日期 + 前」算截止；紧接的日期行继承上一句的角色——
  *    只继承以「时间/截止」收尾的标题行，不继承任意上一句），
  *    并且主日程不再被强制写成 primary——多日期卡片靠角色标签区分每一条
+ * 7：解析日程的起止时刻（startTime / endTime），供日期时间轴按小时定位
  */
-const SCHEDULE_VERSION = 6;
+const SCHEDULE_VERSION = 7;
 
 /**
  * 轻量迁移：给老数据库补上没有的列。

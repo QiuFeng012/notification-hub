@@ -66,6 +66,31 @@ describe('toCardView', () => {
     expect(toCardView({ ...VALID_CARD, pinned: undefined })?.pinned).toBe(false);
     expect(toCardView({ ...VALID_CARD, pinned: 'true' })?.pinned).toBe(false);
   });
+
+  it('保留合法的起止时刻，丢弃非法值', () => {
+    const schedule = {
+      start: '2026-10-18',
+      end: '2026-10-18',
+      dayCount: 1,
+      label: '',
+      inferredYear: false,
+    };
+    const card = {
+      ...VALID_CARD,
+      schedule: { ...schedule, startTime: '09:05', endTime: '24:00' },
+      schedules: [{ ...schedule, startTime: '09:05', endTime: '24:00' }],
+    };
+    expect(toCardView(card)?.schedule?.startTime).toBe('09:05');
+    expect(toCardView(card)?.schedule?.endTime).toBe('24:00');
+
+    const invalid = {
+      ...VALID_CARD,
+      schedule: { ...schedule, startTime: '24:00', endTime: '25:00' },
+      schedules: [{ ...schedule, startTime: '24:00', endTime: '25:00' }],
+    };
+    expect(toCardView(invalid)?.schedule?.startTime).toBeUndefined();
+    expect(toCardView(invalid)?.schedule?.endTime).toBeUndefined();
+  });
 });
 
 describe('formatScheduleRange', () => {

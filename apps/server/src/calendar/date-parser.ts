@@ -36,6 +36,13 @@ export interface DateSchedule {
    * 界面用它给同一张卡的不同日程加标签，否则两条颜色相同的条分不清谁是谁。
    */
   role?: ScheduleRole;
+  /**
+   * 起始时刻 HH:mm；文本里没有可靠时刻时为 null。
+   * 只允许 00:00–23:59；24:00 只允许出现在 endTime。
+   */
+  startTime?: string | null;
+  /** 截止时刻 HH:mm；24:00 表示当天结束 */
+  endTime?: string | null;
 }
 
 /** 中文数字 → 阿拉伯数字，处理"三月八日"这类写法 */
@@ -375,7 +382,7 @@ function splitClauses(text: string): string[] {
  * （「请于9月23日前报名，9月24日活动举行」），当标志用反而会抢走活动的时间。
  * 只留语义明确的词。
  */
-const DEADLINE_KEYWORDS = ['截止', '之前', '报名', '提交', '填写', '申请', '反馈'];
+const DEADLINE_KEYWORDS = ['截止', '之前', '报名', '提交', '填写', '申请', '反馈', '完成'];
 /**
  * 「活动」这一类：什么时候真正发生。
  *
@@ -437,12 +444,236 @@ function classifyRole(clause: string, dateIndexInClause: number): ScheduleRole {
   return candidates[0]?.role ?? 'primary';
 }
 
-/** 把一组已解析的日期合成一条日程（取最早与最晚） */
+/** 一个时刻 token：分钟数 + 在归一化文本里的位置 + 时段词 */
+interface ClockToken {
+  minutes: number;
+  index: number;
+  endIndex: number;
+  /** 只有真正带「下午/晚上/凌晨」这类词时才存在；区间第二个时刻通常没有 */
+  period?: string;
+}
+
+/** 两个时刻之间只允许出现这些区间连接符 */
+const CLOCK_RANGE_SEPARATOR = /^[-~—－至到]$/;
+
+/** 全角数字与全角冒号归一化；与日期归一化分开，避免影响「月/日」的识别 */
+function normalizeClockText(text: string): string {
+  return text
+    .replace(/[０-９]/g, (char) => String(char.charCodeAt(0) - 0xff10))
+    .replace(/：/g, ':');
+}
+
+/** 1440 分钟显示成 24:00，其余补零成 HH:mm */
+function formatClockMinutes(minutes: number): string {
+  if (minutes >= 1440) return '24:00';
+  const hour = Math.floor(minutes / 60);
+  const minute = minutes % 60;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+/** 按时段词修正小时；「中午1点」按 13:00 理解 */
+function adjustClockHour(hour: number, period: string | undefined): number {
+  if (!period) return hour;
+  if (['下午', '晚上', '傍晚', '夜里', '夜间'].includes(period) && hour < 12) return hour + 12;
+  if (period === '中午' && (hour === 1 || hour === 2)) return hour + 12;
+  if (['凌晨', '早上', '上午'].includes(period) && hour === 12) return 0;
+  return hour;
+}
+
+/** 把一个正则命中转换成 ClockToken；非法时刻返回 null */
+function clockTokenFrom(
+  match: RegExpMatchArray,
+  options: { chinese: boolean; colon: boolean },
+): ClockToken | null {
+  const index = match.index ?? 0;
+  const period = match[1];
+  const hourText = match[2];
+  if (!hourText) return null;
+
+  const hour = options.chinese ? parseChineseNumber(hourText) : Number(hourText);
+  if (hour === null || !Number.isInteger(hour)) return null;
+
+  const minuteText = match[3];
+  let minute = 0;
+  if (options.colon) {
+    minute = Number(minuteText);
+  } else if (match[0].includes('半')) {
+    minute = 30;
+  } else if (minuteText) {
+    const parsed = options.chinese ? parseChineseNumber(minuteText) : Number(minuteText);
+    if (parsed === null) return null;
+    minute = parsed;
+  }
+
+  if (!Number.isInteger(minute) || minute < 0 || minute > 59) return null;
+  if (hour === 24 && minute === 0) {
+    return {
+      minutes: 1440,
+      index,
+      endIndex: index + match[0].length,
+      ...(period ? { period } : {}),
+    };
+  }
+  if (hour < 0 || hour > 23) return null;
+
+  const adjusted = adjustClockHour(hour, period);
+  return {
+    minutes: adjusted * 60 + minute,
+    index,
+    endIndex: index + match[0].length,
+    ...(period ? { period } : {}),
+  };
+}
+
+/**
+ * 收集文本里的时刻。
+ *
+ * 只认带冒号或「点/时」的写法——「3-8」「2026」「10月22日」里的数字
+ * 都不是时刻，误认会把日期变成时间。
+ */
+function collectClockTokens(text: string): ClockToken[] {
+  const normalized = normalizeClockText(text);
+  const patterns: Array<{ regex: RegExp; chinese: boolean; colon: boolean }> = [
+    {
+      regex: /(上午|下午|中午|晚上|凌晨|早上|傍晚|夜里|夜间)?\s*(\d{1,2})\s*:\s*(\d{2})/g,
+      chinese: false,
+      colon: true,
+    },
+    {
+      regex:
+        /(上午|下午|中午|晚上|凌晨|早上|傍晚|夜里|夜间)?\s*(\d{1,2})\s*[点时](?:\s*(\d{1,2})\s*分?|\s*半)?/g,
+      chinese: false,
+      colon: false,
+    },
+    {
+      regex:
+        /(上午|下午|中午|晚上|凌晨|早上|傍晚|夜里|夜间)?\s*([零一二三四五六七八九十]{1,3})\s*[点时](?:\s*([零一二三四五六七八九十]{1,3})\s*分?|\s*半)?/g,
+      chinese: true,
+      colon: false,
+    },
+  ];
+
+  const tokens: ClockToken[] = [];
+  const seen = new Set<number>();
+  for (const pattern of patterns) {
+    pattern.regex.lastIndex = 0;
+    for (const match of normalized.matchAll(pattern.regex)) {
+      const token = clockTokenFrom(match, pattern);
+      if (!token || seen.has(token.index)) continue;
+      seen.add(token.index);
+      tokens.push(token);
+    }
+  }
+  return tokens.sort((a, b) => a.index - b.index);
+}
+
+/** 文本里是否至少有一个可识别的时刻 */
+function hasClockTokens(text: string): boolean {
+  return collectClockTokens(normalizeClockText(text)).length > 0;
+}
+
+/** 「办公时间 9:00-17:00」是上下文，不该单独变成一件当天的事 */
+function isOfficeHoursClause(text: string): boolean {
+  if (!/(办公|工作|营业)/.test(text)) return false;
+  return collectClockTokens(normalizeClockText(text)).length >= 2;
+}
+
+/**
+ * 区间第二个时刻常常省略时段词：「下午三点到五点」「晚上7点-9点」。
+ * 第一个时刻带了下午/晚上时，把同组的第二个时刻也按下午/晚上理解。
+ */
+function applyRangePeriod(first: ClockToken, last: ClockToken): number {
+  const period = first.period;
+  if (!period || last.period) return last.minutes;
+  const endHour = Math.floor(last.minutes / 60);
+  if (['下午', '晚上', '傍晚', '夜里', '夜间'].includes(period) && endHour < 12) {
+    return last.minutes + 12 * 60;
+  }
+  // 「晚上7点到12点」里的 12 点是当天结束，不是中午
+  if (
+    ['下午', '晚上', '傍晚', '夜里', '夜间'].includes(period) &&
+    endHour === 12 &&
+    last.minutes === 12 * 60
+  ) {
+    return 1440;
+  }
+  if (period === '中午' && (endHour === 1 || endHour === 2)) {
+    return last.minutes + 12 * 60;
+  }
+  return last.minutes;
+}
+
+/** 相邻两个时刻之间只有区间连接符时，归为同一组 */
+function groupClockTokens(tokens: ClockToken[], text: string): ClockToken[][] {
+  const groups: ClockToken[][] = [];
+  for (const token of tokens) {
+    const current = groups[groups.length - 1];
+    const previous = current?.[current.length - 1];
+    if (!current || !previous) {
+      groups.push([token]);
+      continue;
+    }
+    const between = text.slice(previous.endIndex, token.index).replace(/\s+/g, '');
+    if (CLOCK_RANGE_SEPARATOR.test(between)) current.push(token);
+    else groups.push([token]);
+  }
+  return groups;
+}
+
+/**
+ * 取与日期最近的一组时刻，并按角色分配到起止端。
+ *
+ * 锚点是日期在句中的位置：优先取日期之后最近的一组，日期之后没有
+ * 才取日期之前最近的一组。这样「14:30开始，3月5日活动」与
+ * 「3月5日14:30-17:30」都能拿到正确的一组，而不会跨句乱挂。
+ */
+function clockFieldsFor(
+  text: string,
+  anchorIndex: number,
+  role: ScheduleRole,
+): { startTime: string | null; endTime: string | null } {
+  const normalized = normalizeClockText(text);
+  const tokens = collectClockTokens(normalized);
+  if (tokens.length === 0) return { startTime: null, endTime: null };
+
+  const groups = groupClockTokens(tokens, normalized);
+  const after = groups.find((group) => (group[0]?.index ?? 0) >= anchorIndex);
+  const before = [...groups]
+    .reverse()
+    .find((group) => (group[group.length - 1]?.endIndex ?? 0) <= anchorIndex);
+  const chosen = after ?? before;
+  const first = chosen?.[0];
+  const last = chosen?.[chosen.length - 1];
+  if (!first || !last) return { startTime: null, endTime: null };
+
+  const start = first.minutes;
+  const end = applyRangePeriod(first, last);
+
+  if (role === 'deadline') {
+    return { startTime: null, endTime: formatClockMinutes(end) };
+  }
+  if (chosen.length === 1) {
+    if (start >= 1440) return { startTime: null, endTime: '24:00' };
+    return { startTime: formatClockMinutes(start), endTime: null };
+  }
+  if (start >= 1440) return { startTime: null, endTime: '24:00' };
+  if (end < start) return { startTime: formatClockMinutes(start), endTime: null };
+  return { startTime: formatClockMinutes(start), endTime: formatClockMinutes(end) };
+}
+
+/**
+ * 把一组已解析的日期合成一条日程（取最早与最晚）
+ *
+ * clockText / clockAnchor 是时刻解析的文本与日期位置；默认用 label 与 0，
+ * 便于只关心日期的调用方不改签名。
+ */
 function toSchedule(
   dates: Date[],
   yearInferred: boolean[],
   label: string,
   role: ScheduleRole,
+  clockText: string = label,
+  clockAnchor: number = 0,
 ): DateSchedule {
   const times = dates.map((date) => date.getTime());
   const minTime = Math.min(...times);
@@ -460,6 +691,7 @@ function toSchedule(
     inferredYear:
       yearInferred.length === 0 || yearInferred[startIndex] === true || yearInferred[endIndex] === true,
     role,
+    ...clockFieldsFor(clockText, clockAnchor, role),
   };
 }
 
@@ -511,7 +743,13 @@ export function buildSchedules(
    * 实测出现过：卫检的「16:00前交表」被邻居的"活动"带跑。
    */
   let labelRole: ScheduleRole | null = null;
-  for (const clause of splitClauses(raw)) {
+  /** 最近一句出现过的日期；给「16:00前提交」这种省略日期的后续句继承 */
+  let lastDates: Date[] | null = null;
+  let lastInferred: boolean[] = [];
+
+  const clauses = splitClauses(raw);
+  for (let clauseIndex = 0; clauseIndex < clauses.length; clauseIndex += 1) {
+    const clause = clauses[clauseIndex] ?? '';
     // 先归一化中文数字、再去掉防粘连的分隔符：
     // 「于3月5日」不能被换成「53月5日」，否则日期全读错
     const normalized = expandAbbreviatedRanges(stripNumSeparator(normalizeDigits(clause)));
@@ -535,11 +773,24 @@ export function buildSchedules(
       }
     }
     if (dates.length === 0) {
-      // 标题行：没有日期，但可能替下一句说明了这是什么时间
       const heading = classifyRole(normalized, 0);
-      labelRole = isHeading(normalized) && heading !== 'primary' ? heading : null;
+      // 标题行：没有日期，但可能替下一句说明了这是什么时间
+      if (isHeading(normalized)) {
+        labelRole = heading !== 'primary' ? heading : null;
+        continue;
+      }
+      // 日期省略、但角色和时刻明确的后续句：「3月5日9:00-17:00办公，16:00前提交」。
+      // 只继承非 primary 的角色，避免把任意一句都当成新事件。
+      if (lastDates && heading !== 'primary' && hasClockTokens(normalized)) {
+        const carried = toSchedule(lastDates, lastInferred, clause, heading, normalized, 0);
+        if (carried.startTime || carried.endTime) merged.push(carried);
+      }
+      labelRole = null;
       continue;
     }
+
+    lastDates = dates;
+    lastInferred = inferred;
 
     // 角色取句内离第一个日期最近的那类关键词
     const first = collectExplicitDates(normalized, anchor)[0];
@@ -547,7 +798,15 @@ export function buildSchedules(
     // 自己判不出来时，才借用紧邻的标题行；用完即清，不影响更远的句子
     const role: ScheduleRole = own !== 'primary' ? own : (labelRole ?? 'primary');
     labelRole = null;
-    merged.push(toSchedule(dates, inferred, clause, role));
+
+    // 办公时间只是上下文：后面紧跟着另一条带时刻的安排时，不要把它画成事件，
+    // 否则「办公室 9-17 点」会顶掉真正的 16:00 截止。
+    const next = clauses[clauseIndex + 1];
+    if (isOfficeHoursClause(normalized) && next && hasClockTokens(next)) {
+      continue;
+    }
+
+    merged.push(toSchedule(dates, inferred, clause, role, normalized, first?.at ?? 0));
   }
   if (merged.length === 0) return [];
 
@@ -695,18 +954,38 @@ function schedulesOverlap(a: DateSchedule, b: DateSchedule): boolean {
   return !(a.end < b.start || b.end < a.start);
 }
 
+/** 两个 HH:mm 里较早的非空值；字符串比较对补零时刻成立 */
+function earlierClock(a: string | null | undefined, b: string | null | undefined): string | null {
+  if (!a) return b ?? null;
+  if (!b) return a;
+  return a <= b ? a : b;
+}
+
+/** 两个 HH:mm 里较晚的非空值；24:00 字符串最大，正好表示当天结束 */
+function laterClock(a: string | null | undefined, b: string | null | undefined): string | null {
+  if (!a) return b ?? null;
+  if (!b) return a;
+  return a >= b ? a : b;
+}
+
 /** 合并两条同角色的日程：取并集区间，标注保留文本较完整的那条 */
 function mergeTwo(a: DateSchedule, b: DateSchedule): DateSchedule {
   const start = a.start <= b.start ? a.start : b.start;
   const end = a.end >= b.end ? a.end : b.end;
   const label = (a.label.length >= b.label.length ? a.label : b.label) || a.label;
+  const role = a.role;
+  const startTime = role === 'deadline' ? null : earlierClock(a.startTime, b.startTime);
+  const endTime = laterClock(a.endTime, b.endTime);
   return {
     start,
     end,
     dayCount: daysBetween(start, end) + 1,
     label,
     inferredYear: a.inferredYear || b.inferredYear,
-    role: a.role,
+    role,
+    startTime,
+    // 合并后结束早于开始说明两条的时段对不上；按「只有起始」处理，避免负宽度
+    endTime: startTime && endTime && endTime < startTime ? null : endTime,
   };
 }
 
@@ -832,11 +1111,17 @@ export function parseSchedule(
     resolvedYearInferred[startIndex] === true ||
     resolvedYearInferred[endIndex] === true;
 
+  // 时刻只用于时间轴，不写回 role：这里没有拆分日程，
+  // 给一个 role 会改变界面上原本不显示的标签。
+  const clockAnchor = explicit[0]?.at ?? 0;
+  const clockFields = clockFieldsFor(text, clockAnchor, classifyRole(text, clockAnchor));
+
   return {
     start: startIso,
     end: endIso,
     dayCount: daysBetween(startIso, endIso) + 1,
     label: raw,
     inferredYear,
+    ...clockFields,
   };
 }

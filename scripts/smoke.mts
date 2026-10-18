@@ -42,6 +42,11 @@ async function main(): Promise<void> {
   check('返回了卡片 id', typeof created.id === 'string' && created.id.length > 0);
   check('标题非空', created.title.length > 0, `标题为 "${created.title}"`);
   check('要点非空', created.keyPoints.length > 0);
+  check(
+    '排期带上截止时刻（真实 API 序列化）',
+    created.schedule?.endTime === '24:00',
+    JSON.stringify(created.schedule),
+  );
   console.log(`     标题：${created.title}`);
   console.log(`     要点：${created.keyPoints.length} 条`);
 

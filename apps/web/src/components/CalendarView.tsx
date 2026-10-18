@@ -1,14 +1,14 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type {
   CardRevision,
   CardSchedule,
   HighlightStyle,
   ReExtractPreview,
-  ScheduleRole,
   UpdateCardRequest,
   UpdateSettingsRequest,
 } from '@notification-hub/shared';
 import { CardEditForm } from './CardEditForm';
+import { DayTimeline } from './DayTimeline';
 import { RevisionHistory } from './RevisionHistory';
 import { RgbColorPicker } from './RgbColorPicker';
 import type { CardView } from '../lib/card-view';
@@ -24,29 +24,8 @@ import {
   type CalendarWeek,
   type ScheduleSpan,
 } from '../lib/calendar';
-
-// 周一在最左、周日在最右：这是用户确定的写法（一二三四五六日）
-const WEEKDAY_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
-
-/**
- * 日程角色的中文标签。
- *
- * 一条通知常常同时给"报名截止"和"活动开始"两个时间，日历上会画两条。
- * 两条颜色相同，没有标签就分不清哪条是哪个——而"哪天之前要交"和
- * "哪天要去"是完全不同的两件事。
- *
- * 用「截止」而不是「报名截止」：需要按时交的不只有报名，
- * 还有"纸质缓检表交到值班台"这类，说"报名截止"会指错事。
- *
- * primary 的「主要」只在**多日期的卡片上**才显示（见 roleLabelOf）：
- * 绝大多数通知只有一个时间，给它加个标签只是噪声。
- */
-const SCHEDULE_ROLE_LABELS: Record<ScheduleRole, string> = {
-  deadline: '截止',
-  activity: '活动',
-  visit: '到场',
-  primary: '主要',
-};
+import { WEEKDAY_LABELS } from '../lib/day-timeline';
+import { SCHEDULE_ROLE_LABELS } from '../lib/schedule-labels';
 
 /**
  * 常用的起始色，仅作为"快捷起点"。
@@ -77,15 +56,6 @@ interface CalendarViewProps {
   onClearRevisions: (id: string) => Promise<void>;
   /** 今天，格式 YYYY-MM-DD；注入是为了测试可确定 */
   today: string;
-}
-
-function formatDateLabel(date: string): string {
-  const parts = splitIsoDate(date);
-  if (!parts) return date;
-  const weekday = new Date(parts.year, parts.month - 1, parts.day).getDay();
-  // 表头是「一…日」，所以要把 getDay() 的周日=0 换算成周一=0 再查表
-  const label = WEEKDAY_LABELS[weekday === 0 ? 6 : weekday - 1];
-  return `${parts.month}月${parts.day}日 周${label}`;
 }
 
 /**
@@ -137,6 +107,14 @@ export function CalendarView({
    * 松手后才写入设置——否则拖一次会往接口打几十个请求。
    */
   const [previewColors, setPreviewColors] = useState<Record<string, string>>({});
+  /** 被时间轴选中的那条详情，用来把它滚进可视区 */
+  const activeDetailRef = useRef<HTMLLIElement | null>(null);
+
+  // 时间轴在上、详情在下；条多时点完条可能看不到高亮，所以把详情带进视野
+  useEffect(() => {
+    if (!activeEntryKey) return;
+    activeDetailRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeEntryKey]);
 
   /** 把预览色叠到已保存配置上，得到"当前该怎么画" */
   const styleForRender = useMemo(() => {
@@ -478,11 +456,19 @@ export function CalendarView({
       )}
 
       {selectedDate ? (
-        <div className="calendar__detail" data-testid="calendar-detail">
-          <h3 className="calendar__detail-title">{formatDateLabel(selectedDate)}</h3>
-          {selectedEntries.length === 0 ? (
-            <p className="calendar__detail-empty">这天没有安排。</p>
-          ) : (
+        <div
+          className="calendar__detail calendar__detail--timeline"
+          data-testid="calendar-detail"
+        >
+          <DayTimeline
+            date={selectedDate}
+            entries={selectedEntries}
+            highlight={styleForRender}
+            activeKey={activeEntryKey}
+            onSelect={setActiveEntryKey}
+            onClose={() => setSelectedDate(null)}
+          />
+          {selectedEntries.length > 0 ? (
             <ul className="calendar__detail-list">
               {selectedEntries.map(({ card, schedule, key }) => {
                 const isMulti = (schedule?.dayCount ?? 1) >= 2;
@@ -514,6 +500,7 @@ export function CalendarView({
                 return (
                   <li
                     key={key}
+                    ref={activeEntryKey === key ? activeDetailRef : undefined}
                     className={
                       activeEntryKey === key
                         ? 'calendar__detail-item calendar__detail-item--active'
@@ -657,7 +644,7 @@ export function CalendarView({
                 );
               })}
             </ul>
-          )}
+          ) : null}
         </div>
       ) : null}
 
