@@ -276,6 +276,21 @@ export interface UpdateSettingsResponse {
 }
 
 /**
+ * 设置页「系统」区所需的本机状态。
+ *
+ * autostart 由服务端按文件系统事实计算（启动文件夹里是否有本应用的 .lnk），
+ * 不用内存缓存——用户在别处手动删掉启动项后，界面不能继续显示"已开启"。
+ */
+export interface SystemView {
+  /** 是否已设置开机自启动 */
+  autostart: boolean;
+  /** 本机服务端口 */
+  port: number;
+  /** 数据目录（信息卡与设置文件所在） */
+  dataDir: string;
+}
+
+/**
  * 重新提炼的预览结果：官方改了口径，把新原文再提炼一遍，供用户逐项对比。
  *
  * **刻意不做成"直接改掉卡片"**：官方修改后的原文未必只改时间，
