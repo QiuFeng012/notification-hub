@@ -1,4 +1,4 @@
-﻿import assert from 'node:assert/strict';
+import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -368,6 +368,8 @@ describe('sqlite 仓储', () => {
       // 排期是解析结果的缓存，解析器升级后必须重算，否则旧卡片会一直停在错的日期
       assert.equal(repo.get('old')?.schedule?.start, '2026-10-22');
       assert.equal(repo.get('old')?.schedule?.end, '2026-10-22');
+      assert.equal(repo.get('old')?.schedule?.startTime, '14:30');
+      assert.equal(repo.get('old')?.schedule?.endTime, '17:30');
     } finally {
       repo.close();
     }
@@ -378,7 +380,27 @@ describe('sqlite 仓储', () => {
       .prepare(`SELECT schedule_version FROM cards WHERE id = 'old'`)
       .get() as unknown as { schedule_version: number };
     inspect.close();
-    assert.equal(Number(row.schedule_version), 6, '重算后应记下当前解析版本');
+    assert.equal(Number(row.schedule_version), 7, '重算后应记下当前解析版本');
+  });
+
+  it('写入与读回的日程保留起止时刻', () => {
+    const repo = createSqliteCardRepository(tempDbPath());
+    try {
+      const schedule = {
+        start: '2026-10-18',
+        end: '2026-10-18',
+        dayCount: 1,
+        label: '10月18日14:30-17:30',
+        inferredYear: false,
+        startTime: '14:30',
+        endTime: '17:30',
+      };
+      const card = makeCard({ schedule, schedules: [schedule] });
+      repo.insert(card);
+      assert.deepEqual(repo.get(card.id)?.schedules, [schedule]);
+    } finally {
+      repo.close();
+    }
   });
 
   it('中文与换行内容不会损坏', () => {
