@@ -157,7 +157,8 @@ interface CardSchedule {
 ### 6.5 合并与兜底
 
 - 同一角色内合并两条重叠日程时：`startTime` 取较早的非空值，`endTime` 取较晚的非空值。
-- 合并后若 `endTime <= startTime`：丢弃 `endTime`，按「只有起始」处理；避免负宽度。
+- 合并后若 `endTime < startTime`：丢弃 `endTime`，按「只有起始」处理；避免负宽度。
+  `endTime === startTime` 保留为点事件，视觉上给最小宽度。
 - 解析不出任何时刻：两个字段都留空，界面画全天条并明确标注。
 - `time` 字段兜底解析时，若文本含「前 / 截止 / 完成 / 提交」，按 `deadline` 填 `endTime`；
   否则按 `primary` 填 `startTime`。
@@ -186,9 +187,10 @@ dayEnd   = (D === end)   ? (endTime   ?? 24:00) : 24:00
 防御：
 
 - `D` 不在 `[start, end]` 内 → 不生成条（正常调用不会出现，纯函数要能兜住）。
-- `dayEnd < dayStart` → 取 `dayEnd = dayStart`，视觉上给最小宽度。
-- 零长度事件（如 `12:30` 点事件）保留真实 `start/end` 数据，CSS 给 10px 最小可见宽度，
-  不把视觉宽度当成时长。
+- 计算出的 `dayEnd < dayStart` → 丢弃结束端，按「只有起始」画到 24:00；
+  不把它压成一个点，那会把「17:00–15:00」这种坏数据伪装成瞬间事件。
+- 零长度事件（起止分钟相等，如 `12:30–12:30`）保留真实 `start/end` 数据，
+  CSS 给 10px 最小可见宽度，不把视觉宽度当成时长。
 
 ### 7.2 行与几何
 
@@ -307,7 +309,8 @@ CalendarView（selectedDate / selectedEntries / activeEntryKey）
 
 - 老数据没有 `startTime/endTime`：全天条 + 「时刻未识别」，不报错、不消失。
 - 非法时刻（格式错、越界）：`toCardView` 丢弃该字段，按缺失处理。
-- `endTime <= startTime`：服务端已丢弃 `endTime`；前端再兜一次，按只有起始处理。
+- `endTime < startTime`：服务端已丢弃 `endTime`；前端再兜一次，按只有起始处理。
+  `endTime === startTime` 是点事件，保留两端。
 - 跨午夜事件（23:00–01:00）：MVP 不解析成跨天；若数据出现 `end < start`，按当天
   起始到 24:00 处理，并在条上保留真实时刻文本，避免静默改数。
 - 同一天多条同名事件：按 `scheduleIndex` 区分，`data-entry-key` 唯一。
