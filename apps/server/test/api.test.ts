@@ -8,6 +8,7 @@ import { buildApp } from '../src/app.js';
 import { createMemoryCardRepository } from '../src/db/sqlite-repository.js';
 import { createCardService, ValidationError } from '../src/services/card-service.js';
 import { createSettingsService } from '../src/services/settings-service.js';
+import { SystemError, type SystemService } from '../src/services/system-service.js';
 import { createSettingsStore } from '../src/settings/settings-store.js';
 import type { Summarizer } from '../src/ai/types.js';
 
@@ -61,13 +62,50 @@ function makeSettingsService(envApiKey: string | null = null) {
   });
 }
 
-async function makeApp(summarizer: Summarizer = stubSummarizer, envApiKey: string | null = null) {
+interface AppExtras {
+  systemService?: SystemService;
+  onShutdown?: () => void;
+  onUninstall?: () => void;
+}
+
+async function makeApp(
+  summarizer: Summarizer = stubSummarizer,
+  envApiKey: string | null = null,
+  extras: AppExtras = {},
+) {
   const repo = createMemoryCardRepository();
   const app = await buildApp({
     cardService: createCardService(repo, summarizer),
     settingsService: makeSettingsService(envApiKey),
+    ...extras,
   });
   return { app, repo };
+}
+
+interface FakeSystemCalls {
+  setAutostart: boolean[];
+  uninstall: number;
+}
+
+/** 一个不真正执行 PowerShell 的 system-service 替身，记录调用 */
+function fakeSystemService(overrides: Partial<SystemService> = {}): {
+  service: SystemService;
+  calls: FakeSystemCalls;
+} {
+  const calls: FakeSystemCalls = { setAutostart: [], uninstall: 0 };
+  const service: SystemService = {
+    getStatus: () => ({ autostart: false, port: 5178, dataDir: '/data' }),
+    setAutostart: async (enabled: boolean) => {
+      calls.setAutostart.push(enabled);
+      return { autostart: enabled, port: 5178, dataDir: '/data' };
+    },
+    scheduleUninstall: async () => {
+      calls.uninstall += 1;
+      return '/tmp/notification-hub-uninstall-cleaner.ps1';
+    },
+    ...overrides,
+  };
+  return { service, calls };
 }
 
 async function createCard(app: Awaited<ReturnType<typeof makeApp>>['app'], rawText: string) {
@@ -463,6 +501,104 @@ describe('DELETE /api/settings', () => {
     const body = (await app.inject({ method: 'GET', url: '/api/settings' })).json();
     assert.equal(body.source, 'env');
     assert.equal(body.configured, true);
+    await app.close();
+  });
+});
+
+describe('GET /api/system', () => {
+  it('返回自启状态、端口与数据目录', async () => {
+    const { app } = await makeApp(stubSummarizer, null, { systemService: fakeSystemService().service });
+    const response = await app.inject({ method: 'GET', url: '/api/system' });
+
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json(), { autostart: false, port: 5178, dataDir: '/data' });
+    await app.close();
+  });
+});
+
+describe('POST /api/system/autostart', () => {
+  it('开自启时调用 setAutostart(true) 并回传新状态', async () => {
+    const fake = fakeSystemService();
+    const { app } = await makeApp(stubSummarizer, null, { systemService: fake.service });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/system/autostart',
+      payload: { enabled: true },
+    });
+
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(response.json(), { autostart: true });
+    assert.deepEqual(fake.calls.setAutostart, [true]);
+    await app.close();
+  });
+
+  it('enabled 非布尔值返回 400 INVALID_BODY', async () => {
+    const fake = fakeSystemService();
+    const { app } = await makeApp(stubSummarizer, null, { systemService: fake.service });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/system/autostart',
+      payload: { enabled: 'yes' },
+    });
+
+    assert.equal(response.statusCode, 400);
+    assert.equal(response.json().error.code, 'INVALID_BODY');
+    await app.close();
+  });
+
+  it('SystemError 映射成 500 且带错误码', async () => {
+    const fake = fakeSystemService({
+      setAutostart: async () => {
+        throw new SystemError('AUTOSTART_FAILED', 'boom');
+      },
+    });
+    const { app } = await makeApp(stubSummarizer, null, { systemService: fake.service });
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/system/autostart',
+      payload: { enabled: true },
+    });
+
+    assert.equal(response.statusCode, 500);
+    assert.equal(response.json().error.code, 'AUTOSTART_FAILED');
+    await app.close();
+  });
+});
+
+describe('POST /api/system/shutdown', () => {
+  it('返回 202 并触发 onShutdown', async () => {
+    let shutdownCalled = false;
+    const { app } = await makeApp(stubSummarizer, null, {
+      systemService: fakeSystemService().service,
+      onShutdown: () => {
+        shutdownCalled = true;
+      },
+    });
+    const response = await app.inject({ method: 'POST', url: '/api/system/shutdown' });
+
+    assert.equal(response.statusCode, 202);
+    assert.equal(response.json().shuttingDown, true);
+    assert.equal(shutdownCalled, true);
+    await app.close();
+  });
+});
+
+describe('POST /api/system/uninstall', () => {
+  it('派发清理器、返回 202 并触发 onUninstall', async () => {
+    const fake = fakeSystemService();
+    let uninstallCalled = false;
+    const { app } = await makeApp(stubSummarizer, null, {
+      systemService: fake.service,
+      onUninstall: () => {
+        uninstallCalled = true;
+      },
+    });
+    const response = await app.inject({ method: 'POST', url: '/api/system/uninstall' });
+
+    assert.equal(response.statusCode, 202);
+    assert.equal(response.json().uninstalling, true);
+    assert.equal(fake.calls.uninstall, 1);
+    assert.equal(uninstallCalled, true);
     await app.close();
   });
 });

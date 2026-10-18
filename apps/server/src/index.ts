@@ -1,9 +1,11 @@
+import path from 'node:path';
 import { createSummarizerProvider } from './ai/provider.js';
 import { buildApp } from './app.js';
 import { loadConfig } from './config.js';
 import { createSqliteCardRepository } from './db/sqlite-repository.js';
 import { createCardService } from './services/card-service.js';
 import { createSettingsService } from './services/settings-service.js';
+import { createSystemService } from './services/system-service.js';
 import { createSettingsStore } from './settings/settings-store.js';
 
 const config = loadConfig();
@@ -35,11 +37,29 @@ const settingsService = createSettingsService({
   defaultModel: config.deepseekModel,
 });
 
-const app = await buildApp({
+// 生命周期：关闭、开机自启、卸载
+const systemService = createSystemService({
+  repoRoot: config.repoRoot,
+  port: config.port,
+  dataDir: path.dirname(config.dbPath),
+});
+
+// 关闭与卸载都要先把响应发出去、再关服务；先关服务客户端会拿不到响应。
+let app!: Awaited<ReturnType<typeof buildApp>>;
+function scheduleClose(): void {
+  setTimeout(() => {
+    void app.close().then(() => process.exit(0));
+  }, 50);
+}
+
+app = await buildApp({
   cardService,
   settingsService,
+  systemService,
   webDistPath: config.webDistPath,
   logger: true,
+  onShutdown: scheduleClose,
+  onUninstall: scheduleClose,
 });
 
 app.addHook('onClose', async () => {

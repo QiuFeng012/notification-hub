@@ -7,12 +7,20 @@ import type { CardService } from './services/card-service.js';
 import { ValidationError } from './services/card-service.js';
 import type { SettingsService } from './services/settings-service.js';
 import { SettingsValidationError } from './services/settings-service.js';
+import type { SystemService } from './services/system-service.js';
+import { SystemError } from './services/system-service.js';
 import type { SettingsPatch } from './settings/settings-store.js';
 
 export interface BuildAppOptions {
   cardService: CardService;
   /** 省略时不注册 /api/settings 路由（供只关心信息卡的测试使用） */
   settingsService?: SettingsService;
+  /** 省略时不注册 /api/system 路由 */
+  systemService?: SystemService;
+  /** 收到关闭请求后的动作（生产环境里关服务并退出）；测试注入空实现 */
+  onShutdown?: () => void;
+  /** 派发卸载清理器后的动作（生产环境里关服务并退出）；测试注入空实现 */
+  onUninstall?: () => void;
   /** 已构建的前端资源目录；不存在就只提供 API */
   webDistPath?: string;
   logger?: boolean;
@@ -57,6 +65,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     }
     if (error instanceof SummaryError) {
       return reply.code(502).send({ error: { code: 'SUMMARY_FAILED', message: error.message } });
+    }
+    if (error instanceof SystemError) {
+      return reply.code(500).send({ error: { code: error.code, message: error.message } });
     }
 
     // Fastify 自带的解析类错误（如 body 不是合法 JSON）带 4xx statusCode，直接透传
@@ -116,6 +127,35 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
     });
 
     app.delete('/api/settings', async () => settingsService.clear());
+  }
+
+  // ---------- 生命周期（关闭 / 卸载 / 开机自启） ----------
+  // 设置页对系统的所有操作都落在这里：浏览器页面无法直接跑 PowerShell
+  // 或写快捷方式，只能经服务端编排。
+  const systemService = options.systemService;
+  if (systemService) {
+    app.get('/api/system', async () => systemService.getStatus());
+
+    app.post('/api/system/autostart', async (request) => {
+      const body = (request.body ?? {}) as { enabled?: unknown };
+      if (typeof body.enabled !== 'boolean') {
+        throw new ValidationError('INVALID_BODY', 'enabled 必须是布尔值');
+      }
+      const status = await systemService.setAutostart(body.enabled);
+      return { autostart: status.autostart };
+    });
+
+    // 先把 202 发出去再关闭：先关服务的话客户端拿不到响应。
+    app.post('/api/system/shutdown', async (_request, reply) => {
+      await reply.code(202).send({ shuttingDown: true });
+      options.onShutdown?.();
+    });
+
+    app.post('/api/system/uninstall', async (_request, reply) => {
+      await systemService.scheduleUninstall();
+      await reply.code(202).send({ uninstalling: true });
+      options.onUninstall?.();
+    });
   }
 
   app.get('/api/cards', async () => options.cardService.listCards());
