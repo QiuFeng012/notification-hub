@@ -29,6 +29,22 @@ Write-Host ""
 Write-Host "  信息整合台 —— 停止服务" -ForegroundColor Cyan
 Write-Host "  ----------------------------------------"
 
+# 先尝试优雅关闭：Windows 上 Stop-Process -Force 不会触发 Node 的 SIGTERM
+# 处理器，硬杀会跳过"关数据库、释放端口"这些收尾。接口不可用（老版本、
+# 端口不对、服务已半死）时再走下面的硬杀兜底。
+if (Test-ServiceReady) {
+  try {
+    Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/system/shutdown" -Method Post -TimeoutSec 3 | Out-Null
+    Write-Host "  [OK] 已请求服务优雅关闭" -ForegroundColor Green
+    for ($i = 0; $i -lt 20; $i++) {
+      Start-Sleep -Milliseconds 250
+      if (-not (Test-ServiceReady)) { break }
+    }
+  } catch {
+    Write-Host "  [!] 优雅关闭接口不可用，改用结束进程" -ForegroundColor Yellow
+  }
+}
+
 $targets = @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue |
   Where-Object { $_.CommandLine -match 'dist[\\/]index\.js' })
 

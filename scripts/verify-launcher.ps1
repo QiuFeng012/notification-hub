@@ -183,6 +183,8 @@ Write-Host "`n3. 安全性检查"
 $startScript = Get-Content (Join-Path $scriptsDir 'start-server.ps1') -Raw
 Check "停止脚本不会误杀其他 node 进程" `
   ((Get-Content (Join-Path $scriptsDir 'stop-server.ps1') -Raw) -match "dist\[\\\\/\]index")
+Check "停止脚本先走 /api/system/shutdown 优雅关闭" `
+  ((Get-Content (Join-Path $scriptsDir 'stop-server.ps1') -Raw) -match 'system/shutdown')
 Check "启动脚本支持检测端口占用" ($startScript -match 'Get-NetTCPConnection')
 Check "启动脚本等待服务就绪而不是盲目打开页面" ($startScript -match 'Test-ServiceReady')
 
