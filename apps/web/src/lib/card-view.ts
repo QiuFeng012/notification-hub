@@ -106,6 +106,22 @@ function shortDate(value: string, referenceYear?: number): string | null {
   return `${prefix}${parts.month}月${parts.day}日`;
 }
 
+/** 时刻字段归一化：只接受 HH:mm；start 不接受 24:00，end 接受 */
+function normalizeClock(value: unknown, allowEndOfDay: boolean): string | null {
+  if (typeof value !== 'string') return null;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match?.[1] || !match[2]) return null;
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  if (!Number.isInteger(hour) || !Number.isInteger(minute)) return null;
+  if (minute < 0 || minute > 59) return null;
+  if (hour === 24 && minute === 0) return allowEndOfDay ? '24:00' : null;
+  if (hour < 0 || hour > 23) return null;
+
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
 /** 日程的归一化：起始日期不合法就当作没有排期，避免把坏数据铺进日历 */
 function toSchedule(input: unknown): CardSchedule | null {
   if (typeof input !== 'object' || input === null) return null;
@@ -113,6 +129,9 @@ function toSchedule(input: unknown): CardSchedule | null {
   const start = nonEmptyString(record.start);
   const end = nonEmptyString(record.end);
   if (!start || !end) return null;
+  const startTime = normalizeClock(record.startTime, false);
+  const rawEndTime = normalizeClock(record.endTime, true);
+  const endTime = rawEndTime && (!startTime || rawEndTime >= startTime) ? rawEndTime : null;
   return {
     start,
     end,
@@ -120,6 +139,8 @@ function toSchedule(input: unknown): CardSchedule | null {
     label: typeof record.label === 'string' ? record.label : '',
     inferredYear: record.inferredYear === true,
     ...(isScheduleRole(record.role) ? { role: record.role } : {}),
+    ...(startTime ? { startTime } : {}),
+    ...(endTime ? { endTime } : {}),
   };
 }
 
