@@ -463,6 +463,12 @@ describe('日程时刻', () => {
     assert.equal(s?.endTime, '16:00');
   });
 
+  it('「完成」也是截止语义', () => {
+    const s = schedule('3月5日16:00完成');
+    assert.equal(s?.startTime, null);
+    assert.equal(s?.endTime, '16:00');
+  });
+
   it('24:00 只作为结束时刻', () => {
     const deadline = schedule('3月5日24:00前');
     assert.equal(deadline?.startTime, null);
@@ -500,6 +506,16 @@ describe('日程时刻', () => {
     assert.equal(list[0]?.endTime, '16:00');
   });
 
+  it('日期在同一句的办公时间也不会顶替后面的截止', () => {
+    // 日期只出现在办公时间那句；后面的截止句没有日期，但仍是同一天的安排
+    const list = buildSchedules('3月5日9:00-17:00办公，16:00前提交', {
+      anchor: ANCHOR,
+    });
+    assert.equal(list.length, 1);
+    assert.equal(list[0]?.startTime, null);
+    assert.equal(list[0]?.endTime, '16:00');
+  });
+
   it('非法时刻被丢弃，日期仍保留', () => {
     for (const text of ['3月5日25:00', '3月5日12:60', '3月5日9:5']) {
       const s = schedule(text);
@@ -513,6 +529,28 @@ describe('日程时刻', () => {
     const s = schedule('3月5日14:30-14:15');
     assert.equal(s?.startTime, '14:30');
     assert.equal(s?.endTime, null);
+  });
+
+  it('时段词作用于整个区间，而不是只作用于第一个时刻', () => {
+    const afternoon = schedule('3月5日下午三点到五点');
+    assert.equal(afternoon?.startTime, '15:00');
+    assert.equal(afternoon?.endTime, '17:00');
+
+    const evening = schedule('3月5日晚上7点至9点');
+    assert.equal(evening?.startTime, '19:00');
+    assert.equal(evening?.endTime, '21:00');
+
+    const colon = schedule('3月5日下午2:00-4:00');
+    assert.equal(colon?.startTime, '14:00');
+    assert.equal(colon?.endTime, '16:00');
+
+    const early = schedule('3月5日凌晨1点到3点');
+    assert.equal(early?.startTime, '01:00');
+    assert.equal(early?.endTime, '03:00');
+
+    const plain = schedule('3月5日3点-5点');
+    assert.equal(plain?.startTime, '03:00');
+    assert.equal(plain?.endTime, '05:00');
   });
 
   it('两个不同角色的日程各自拿到自己的时刻', () => {

@@ -382,7 +382,7 @@ function splitClauses(text: string): string[] {
  * （「请于9月23日前报名，9月24日活动举行」），当标志用反而会抢走活动的时间。
  * 只留语义明确的词。
  */
-const DEADLINE_KEYWORDS = ['截止', '之前', '报名', '提交', '填写', '申请', '反馈'];
+const DEADLINE_KEYWORDS = ['截止', '之前', '报名', '提交', '填写', '申请', '反馈', '完成'];
 /**
  * 「活动」这一类：什么时候真正发生。
  *
@@ -444,11 +444,13 @@ function classifyRole(clause: string, dateIndexInClause: number): ScheduleRole {
   return candidates[0]?.role ?? 'primary';
 }
 
-/** 一个时刻 token：分钟数 + 在归一化文本里的位置 */
+/** 一个时刻 token：分钟数 + 在归一化文本里的位置 + 时段词 */
 interface ClockToken {
   minutes: number;
   index: number;
   endIndex: number;
+  /** 只有真正带「下午/晚上/凌晨」这类词时才存在；区间第二个时刻通常没有 */
+  period?: string;
 }
 
 /** 两个时刻之间只允许出现这些区间连接符 */
@@ -505,7 +507,12 @@ function clockTokenFrom(
 
   if (!Number.isInteger(minute) || minute < 0 || minute > 59) return null;
   if (hour === 24 && minute === 0) {
-    return { minutes: 1440, index, endIndex: index + match[0].length };
+    return {
+      minutes: 1440,
+      index,
+      endIndex: index + match[0].length,
+      ...(period ? { period } : {}),
+    };
   }
   if (hour < 0 || hour > 23) return null;
 
@@ -514,6 +521,7 @@ function clockTokenFrom(
     minutes: adjusted * 60 + minute,
     index,
     endIndex: index + match[0].length,
+    ...(period ? { period } : {}),
   };
 }
 
@@ -557,6 +565,42 @@ function collectClockTokens(text: string): ClockToken[] {
     }
   }
   return tokens.sort((a, b) => a.index - b.index);
+}
+
+/** 文本里是否至少有一个可识别的时刻 */
+function hasClockTokens(text: string): boolean {
+  return collectClockTokens(normalizeClockText(text)).length > 0;
+}
+
+/** 「办公时间 9:00-17:00」是上下文，不该单独变成一件当天的事 */
+function isOfficeHoursClause(text: string): boolean {
+  if (!/(办公|工作|营业)/.test(text)) return false;
+  return collectClockTokens(normalizeClockText(text)).length >= 2;
+}
+
+/**
+ * 区间第二个时刻常常省略时段词：「下午三点到五点」「晚上7点-9点」。
+ * 第一个时刻带了下午/晚上时，把同组的第二个时刻也按下午/晚上理解。
+ */
+function applyRangePeriod(first: ClockToken, last: ClockToken): number {
+  const period = first.period;
+  if (!period || last.period) return last.minutes;
+  const endHour = Math.floor(last.minutes / 60);
+  if (['下午', '晚上', '傍晚', '夜里', '夜间'].includes(period) && endHour < 12) {
+    return last.minutes + 12 * 60;
+  }
+  // 「晚上7点到12点」里的 12 点是当天结束，不是中午
+  if (
+    ['下午', '晚上', '傍晚', '夜里', '夜间'].includes(period) &&
+    endHour === 12 &&
+    last.minutes === 12 * 60
+  ) {
+    return 1440;
+  }
+  if (period === '中午' && (endHour === 1 || endHour === 2)) {
+    return last.minutes + 12 * 60;
+  }
+  return last.minutes;
 }
 
 /** 相邻两个时刻之间只有区间连接符时，归为同一组 */
@@ -603,7 +647,7 @@ function clockFieldsFor(
   if (!first || !last) return { startTime: null, endTime: null };
 
   const start = first.minutes;
-  const end = last.minutes;
+  const end = applyRangePeriod(first, last);
 
   if (role === 'deadline') {
     return { startTime: null, endTime: formatClockMinutes(end) };
@@ -699,7 +743,13 @@ export function buildSchedules(
    * 实测出现过：卫检的「16:00前交表」被邻居的"活动"带跑。
    */
   let labelRole: ScheduleRole | null = null;
-  for (const clause of splitClauses(raw)) {
+  /** 最近一句出现过的日期；给「16:00前提交」这种省略日期的后续句继承 */
+  let lastDates: Date[] | null = null;
+  let lastInferred: boolean[] = [];
+
+  const clauses = splitClauses(raw);
+  for (let clauseIndex = 0; clauseIndex < clauses.length; clauseIndex += 1) {
+    const clause = clauses[clauseIndex] ?? '';
     // 先归一化中文数字、再去掉防粘连的分隔符：
     // 「于3月5日」不能被换成「53月5日」，否则日期全读错
     const normalized = expandAbbreviatedRanges(stripNumSeparator(normalizeDigits(clause)));
@@ -723,11 +773,24 @@ export function buildSchedules(
       }
     }
     if (dates.length === 0) {
-      // 标题行：没有日期，但可能替下一句说明了这是什么时间
       const heading = classifyRole(normalized, 0);
-      labelRole = isHeading(normalized) && heading !== 'primary' ? heading : null;
+      // 标题行：没有日期，但可能替下一句说明了这是什么时间
+      if (isHeading(normalized)) {
+        labelRole = heading !== 'primary' ? heading : null;
+        continue;
+      }
+      // 日期省略、但角色和时刻明确的后续句：「3月5日9:00-17:00办公，16:00前提交」。
+      // 只继承非 primary 的角色，避免把任意一句都当成新事件。
+      if (lastDates && heading !== 'primary' && hasClockTokens(normalized)) {
+        const carried = toSchedule(lastDates, lastInferred, clause, heading, normalized, 0);
+        if (carried.startTime || carried.endTime) merged.push(carried);
+      }
+      labelRole = null;
       continue;
     }
+
+    lastDates = dates;
+    lastInferred = inferred;
 
     // 角色取句内离第一个日期最近的那类关键词
     const first = collectExplicitDates(normalized, anchor)[0];
@@ -735,6 +798,14 @@ export function buildSchedules(
     // 自己判不出来时，才借用紧邻的标题行；用完即清，不影响更远的句子
     const role: ScheduleRole = own !== 'primary' ? own : (labelRole ?? 'primary');
     labelRole = null;
+
+    // 办公时间只是上下文：后面紧跟着另一条带时刻的安排时，不要把它画成事件，
+    // 否则「办公室 9-17 点」会顶掉真正的 16:00 截止。
+    const next = clauses[clauseIndex + 1];
+    if (isOfficeHoursClause(normalized) && next && hasClockTokens(next)) {
+      continue;
+    }
+
     merged.push(toSchedule(dates, inferred, clause, role, normalized, first?.at ?? 0));
   }
   if (merged.length === 0) return [];
