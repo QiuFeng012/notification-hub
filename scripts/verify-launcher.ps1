@@ -97,7 +97,7 @@ Write-Host "  ----------------------------------------"
 
 # ---------- 1. 语法解析 ----------
 Write-Host "`n1. 语法解析"
-foreach ($name in @('start-server.ps1', 'stop-server.ps1', 'status.ps1', 'launch-app.ps1', 'install-desktop-app.ps1', 'verify-launcher.ps1')) {
+foreach ($name in @('start-server.ps1', 'stop-server.ps1', 'status.ps1', 'launch-app.ps1', 'install-desktop-app.ps1', 'set-autostart.ps1', 'verify-launcher.ps1')) {
   $path = Join-Path $scriptsDir $name
   $exists = Test-Path $path
   Check "$name 存在" $exists
@@ -220,6 +220,23 @@ Check "start-server.ps1 用解析出的 node 而非 PATH 里的裸 node" `
   ($startScript -match '\$NodeExe')
 Check "package.json 锁 pnpm 版本（packageManager）" `
   ((Get-Content (Join-Path $repoRoot 'package.json') -Raw) -match 'packageManager')
+
+# ---------- 3c. 开机自启动 ----------
+Write-Host "`n3c. 开机自启动"
+$setAutostart = Join-Path $scriptsDir 'set-autostart.ps1'
+$autostartVbs = Join-Path $scriptsDir 'autostart.vbs'
+Check "存在 set-autostart.ps1" (Test-Path $setAutostart)
+Check "存在 autostart.vbs（无窗口自启包装器）" (Test-Path $autostartVbs)
+if (Test-Path $setAutostart) {
+  $setAutostartSrc = Get-Content $setAutostart -Raw
+  Check "set-autostart.ps1 引用 autostart.vbs" ($setAutostartSrc -match 'autostart\.vbs')
+  Check "set-autostart.ps1 落地在启动文件夹" ($setAutostartSrc -match 'Start Menu\\Programs\\Startup')
+}
+if (Test-Path $autostartVbs) {
+  $autostartVbsSrc = Get-Content $autostartVbs -Raw
+  Check "autostart.vbs 全 ASCII（WSH 对 UTF-8 VBS 支持不稳）" ($autostartVbsSrc -notmatch '[\u4e00-\u9fff]')
+  Check "autostart.vbs 调用 launch-app.ps1 且带 -NoLaunch" ($autostartVbsSrc -match 'launch-app\.ps1' -and $autostartVbsSrc -match '-NoLaunch')
+}
 
 # 编码守卫：Windows PowerShell 5.1 在中文系统上按 GBK 读无 BOM 的 .ps1，
 # 中文全乱码、甚至把解析器弄崩（新机器实测：Unexpected token / Missing '}'）。
@@ -406,6 +423,33 @@ if ($Functional) {
       (@(Get-ChildItem -Path $tempRoot -Recurse -Filter '*.lnk' -ErrorAction SilentlyContinue).Count -eq 0)
   } finally {
     Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  # ---------- 6. 开机自启动 ----------
+  # 与桌面入口同理：落在临时目录，真实启动文件夹不受影响，
+  # 但快捷方式是真的创建、真的读回、真的删除。
+  Write-Host "`n6. 开机自启动（真实创建快捷方式）"
+  $tempStartup = Join-Path ([System.IO.Path]::GetTempPath()) ('nh-autostart-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+  try {
+    $enable = Invoke-Capture $setAutostart @('-Enable', '-StartupDir', $tempStartup)
+    Check "自启脚本正常退出" ($enable.Code -eq 0) "退出码 $($enable.Code)：$($enable.Output)"
+
+    $startupLink = Join-Path $tempStartup '信息整合台.lnk'
+    Check "创建了自启快捷方式" (Test-Path $startupLink) $startupLink
+    if (Test-Path $startupLink) {
+      $shell = New-Object -ComObject WScript.Shell
+      $sc = $shell.CreateShortcut($startupLink)
+      Check "自启入口指向无窗口包装器（wscript）" ($sc.TargetPath -match 'wscript\.exe') $sc.TargetPath
+      $wrapped = $sc.Arguments -replace '"', ''
+      Check "自启包装器路径真实存在" (Test-Path $wrapped) $wrapped
+      Check "自启工作目录指向仓库根" ($sc.WorkingDirectory -eq $repoRoot) $sc.WorkingDirectory
+    }
+
+    $disable = Invoke-Capture $setAutostart @('-Disable', '-StartupDir', $tempStartup)
+    Check "自启卸载正常退出" ($disable.Code -eq 0) "退出码 $($disable.Code)：$($disable.Output)"
+    Check "自启快捷方式已移除" (-not (Test-Path $startupLink))
+  } finally {
+    Remove-Item $tempStartup -Recurse -Force -ErrorAction SilentlyContinue
   }
 
   $stopFinal = Invoke-Capture (Join-Path $scriptsDir 'stop-server.ps1') @('-Port', "$Port")
