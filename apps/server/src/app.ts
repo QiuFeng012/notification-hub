@@ -38,6 +38,9 @@ export async function buildApp(options: BuildAppOptions): Promise<FastifyInstanc
   const app = Fastify({
     logger: options.logger ?? false,
     bodyLimit: 2 * 1024 * 1024,
+    // 关闭时立刻断开 keep-alive 连接：否则 app.close() 会一直等这些连接，
+    // 关闭/卸载接口回 202 之后进程迟迟不退，表现为"点了退出却没退"。
+    forceCloseConnections: true,
   });
 
   // 本地应用不做任何缓存。

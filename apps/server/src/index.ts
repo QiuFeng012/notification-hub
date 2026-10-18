@@ -48,7 +48,9 @@ const systemService = createSystemService({
 let app!: Awaited<ReturnType<typeof buildApp>>;
 function scheduleClose(): void {
   setTimeout(() => {
-    void app.close().then(() => process.exit(0));
+    // 兜底：万一 close 被残留连接拖住，最多等 3 秒也强制退出
+    setTimeout(() => process.exit(0), 3000);
+    void app.close().finally(() => process.exit(0));
   }, 50);
 }
 
