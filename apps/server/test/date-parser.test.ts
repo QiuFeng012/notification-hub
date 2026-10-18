@@ -443,3 +443,96 @@ describe('parseSchedule 返回的 label', () => {
     assert.equal(schedule('  3月8日  ')?.label, '3月8日');
   });
 });
+
+describe('日程时刻', () => {
+  it('只有起始时刻：15:00 开始的活动没有结束时刻', () => {
+    const s = schedule('3月5日15:00开放');
+    assert.equal(s?.startTime, '15:00');
+    assert.equal(s?.endTime, null);
+  });
+
+  it('区间同时给出起止时刻', () => {
+    const s = schedule('3月5日14:30-17:30');
+    assert.equal(s?.startTime, '14:30');
+    assert.equal(s?.endTime, '17:30');
+  });
+
+  it('只有截止时刻：16:00 前完成', () => {
+    const s = schedule('3月5日16：00前');
+    assert.equal(s?.startTime, null);
+    assert.equal(s?.endTime, '16:00');
+  });
+
+  it('24:00 只作为结束时刻', () => {
+    const deadline = schedule('3月5日24:00前');
+    assert.equal(deadline?.startTime, null);
+    assert.equal(deadline?.endTime, '24:00');
+
+    const bare = schedule('3月5日24:00');
+    assert.equal(bare?.startTime, null);
+    assert.equal(bare?.endTime, '24:00');
+  });
+
+  it('下午 / 中文数字 / 全角时刻', () => {
+    assert.equal(schedule('3月5日下午三点半')?.startTime, '15:30');
+    assert.equal(schedule('3月5日晚上7点')?.startTime, '19:00');
+    assert.equal(schedule('3月5日１４：３０开放')?.startTime, '14:30');
+  });
+
+  it('时刻在日期之前时取日期前最近的一组', () => {
+    const s = schedule('14:30开始，3月5日活动');
+    assert.equal(s?.startTime, '14:30');
+  });
+
+  it('同句多组时刻只取日期之后最近的一组', () => {
+    const s = schedule('3月5日9:00-10:00及14:00-15:00');
+    assert.equal(s?.startTime, '09:00');
+    assert.equal(s?.endTime, '10:00');
+  });
+
+  it('同句里的办公时间不会被挂到另一件事上', () => {
+    // 按逗号切成两句后，前一句没有日期，不该把 9:00-17:00 带到后一句的截止上
+    const list = buildSchedules('办公时间9:00-17:00，3月5日16:00前提交报名表', {
+      anchor: ANCHOR,
+    });
+    assert.equal(list.length, 1);
+    assert.equal(list[0]?.startTime, null);
+    assert.equal(list[0]?.endTime, '16:00');
+  });
+
+  it('非法时刻被丢弃，日期仍保留', () => {
+    for (const text of ['3月5日25:00', '3月5日12:60', '3月5日9:5']) {
+      const s = schedule(text);
+      assert.equal(s?.startTime, null, text);
+      assert.equal(s?.endTime, null, text);
+      assert.equal(s?.start, '2025-03-05', text);
+    }
+  });
+
+  it('结束早于开始时只保留起始时刻', () => {
+    const s = schedule('3月5日14:30-14:15');
+    assert.equal(s?.startTime, '14:30');
+    assert.equal(s?.endTime, null);
+  });
+
+  it('两个不同角色的日程各自拿到自己的时刻', () => {
+    const list = buildSchedules('9月23日12:30报名截止，9月24日15:00活动举行', {
+      anchor: ANCHOR,
+    });
+    const deadline = list.find((item) => item.role === 'deadline');
+    const activity = list.find((item) => item.role === 'activity');
+    assert.equal(deadline?.startTime, null);
+    assert.equal(deadline?.endTime, '12:30');
+    assert.equal(activity?.startTime, '15:00');
+    assert.equal(activity?.endTime, null);
+  });
+
+  it('同角色重叠日程合并时保留最早开始与最晚结束', () => {
+    const list = buildSchedules('3月5日14:30-15:30体检，3月5日15:00-16:30体检', {
+      anchor: ANCHOR,
+    });
+    assert.equal(list.length, 1);
+    assert.equal(list[0]?.startTime, '14:30');
+    assert.equal(list[0]?.endTime, '16:30');
+  });
+});

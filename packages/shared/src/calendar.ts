@@ -44,6 +44,13 @@ export interface CardSchedule {
    * （「报名截止」「活动」），否则两条颜色相同的条摆在一起分不清谁是谁。
    */
   role?: ScheduleRole;
+  /**
+   * 起始时刻 HH:mm；文本里没有可靠时刻时为 null。
+   * 只允许 00:00–23:59；24:00 只允许出现在 endTime。
+   */
+  startTime?: string | null;
+  /** 截止时刻 HH:mm；24:00 表示当天结束 */
+  endTime?: string | null;
 }
 
 /** 修改原因：用来区分"官方改了口径"和"我自己记错了" */
