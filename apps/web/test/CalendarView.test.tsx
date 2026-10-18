@@ -633,6 +633,46 @@ describe('点日期看当天安排', () => {
     await userEvent.click(document.querySelector('[data-date="2025-03-06"]') as HTMLElement);
     expect(await screen.findByTestId('calendar-detail')).toHaveTextContent('年份为推断所得');
   });
+
+  it('点日期打开日期时间轴，左上角是选中日期', async () => {
+    await openCalendar([
+      makeCard({
+        title: '时间轴活动',
+        schedule: { ...schedule('2025-03-06'), startTime: '12:30', endTime: '17:30' },
+      }),
+    ]);
+    await screen.findByText('2025 年 3 月');
+
+    await userEvent.click(document.querySelector('[data-date="2025-03-06"]') as HTMLElement);
+
+    const timeline = await screen.findByTestId('day-timeline');
+    expect(timeline).toHaveTextContent('3月6日 周四');
+    const bar = within(timeline).getByTestId('timeline-bar');
+    expect(bar).toHaveAttribute('data-start-min', '750');
+    expect(bar).toHaveAttribute('data-end-min', '1050');
+  });
+
+  it('时间轴里点条会高亮下方对应详情', async () => {
+    await openCalendar([
+      makeCard({
+        title: '时间轴活动',
+        schedule: { ...schedule('2025-03-06'), startTime: '12:30', endTime: '17:30' },
+      }),
+    ]);
+    await screen.findByText('2025 年 3 月');
+    await userEvent.click(document.querySelector('[data-date="2025-03-06"]') as HTMLElement);
+
+    await userEvent.click(await screen.findByTestId('timeline-bar'));
+    expect(screen.getByTestId('calendar-detail-item')).toHaveClass('calendar__detail-item--active');
+  });
+
+  it('没有时刻的旧卡在时间轴上显示全天', async () => {
+    await openCalendar([makeCard({ title: '旧卡', schedule: schedule('2025-03-06') })]);
+    await screen.findByText('2025 年 3 月');
+    await userEvent.click(document.querySelector('[data-date="2025-03-06"]') as HTMLElement);
+
+    expect(await screen.findByTestId('timeline-bar')).toHaveTextContent('全天 · 时刻未识别');
+  });
 });
 
 describe('在日历里修改事件', () => {

@@ -1166,6 +1166,24 @@ body {
   background: var(--bg-elevated);
 }
 
+/**
+ * 时间轴版本：外壳只负责边框，内边距交给时间轴自己；
+ * 否则表头与坐标轴会缩在外壳留白里，看起来像被框住两次。
+ */
+.calendar__detail--timeline {
+  padding: 0;
+  overflow: hidden;
+}
+
+.calendar__detail--timeline > .day-timeline {
+  border: none;
+  border-radius: 0;
+}
+
+.calendar__detail--timeline > .calendar__detail-list {
+  padding: 10px 14px 12px;
+}
+
 .calendar__detail-title {
   margin: 0 0 9px;
   font-size: 13.5px;
