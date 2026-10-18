@@ -315,3 +315,93 @@ describe('DELETE /api/cards/:id/revisions', () => {
     await app.close();
   });
 });
+
+/**
+ * 用户实际报的缺陷：改动完信息的时间后，日历里没有同步。
+ * 示例就是「本学期第一次宿舍内务卫生检查通知」——原文把日期和时刻分成两行，
+ * 卡片的时间字段写着「10月22号（第八周周四）14:30-17:30」，
+ * 但日历上的那条既没有 14:30-17:30，改到 10-29 之后旧日期也还留在日历上。
+ */
+describe('PATCH /api/cards/:id：时间改动同步到日历', () => {
+  const RAW = [
+    '⏰检查时间：',
+    '10月22号（第八周周四）',
+    '14：30-17:30',
+    '请于10月20号（下周二）16：00前交表。',
+  ].join('\n');
+
+  /** 固定产出：模拟创建这张卡时模型提炼出来的时间 */
+  const dormSummarizer: Summarizer = {
+    summarize() {
+      return Promise.resolve({
+        draft: {
+          title: '本学期第一次宿舍内务卫生检查通知',
+          time: '10月22号（第八周周四）14:30-17:30',
+          source: '学生自律委员会',
+          keyPoints: ['检查时间为10月22号（第八周周四）14:30-17:30'],
+        },
+        provider: 'mock' as const,
+      });
+    },
+  };
+
+  async function makeDormApp() {
+    const repo = createMemoryCardRepository();
+    const app = await buildApp({
+      cardService: createCardService(repo, dormSummarizer, {
+        // 固定锚点，日期推断结果才不跟着运行时间漂
+        now: () => new Date('2026-10-13T04:18:03.869Z'),
+      }),
+    });
+    const card = (
+      await app.inject({ method: 'POST', url: '/api/cards', payload: { rawText: RAW } })
+    ).json();
+    return { app, card };
+  }
+
+  it('新建时就把时间字段里的起止时刻补进主日程', async () => {
+    const { app, card } = await makeDormApp();
+
+    assert.equal(card.schedule?.start, '2026-10-22');
+    assert.equal(card.schedule?.startTime, '14:30');
+    assert.equal(card.schedule?.endTime, '17:30');
+    await app.close();
+  });
+
+  it('改到新日期后旧日期从日历上消失，新日期成为主日程', async () => {
+    const { app, card } = await makeDormApp();
+    const updated = (
+      await app.inject({
+        method: 'PATCH',
+        url: `/api/cards/${card.id}`,
+        payload: { time: '10月29号（第九周周四）14:30-18:30', reason: 'official' },
+      })
+    ).json();
+
+    assert.deepEqual(
+      updated.schedules.map((item: { start: string }) => item.start).sort(),
+      ['2026-10-20', '2026-10-29'],
+      `旧日期应被新日期取代，实际 ${JSON.stringify(updated.schedules)}`,
+    );
+    assert.equal(updated.schedule?.start, '2026-10-29');
+    assert.equal(updated.schedule?.startTime, '14:30');
+    assert.equal(updated.schedule?.endTime, '18:30');
+    await app.close();
+  });
+
+  it('只改当天时刻时，主日程的起止时刻跟着同步', async () => {
+    const { app, card } = await makeDormApp();
+    const updated = (
+      await app.inject({
+        method: 'PATCH',
+        url: `/api/cards/${card.id}`,
+        payload: { time: '10月22号（第八周周四）15:00-18:00', reason: 'official' },
+      })
+    ).json();
+
+    assert.equal(updated.schedule?.start, '2026-10-22');
+    assert.equal(updated.schedule?.startTime, '15:00');
+    assert.equal(updated.schedule?.endTime, '18:00');
+    await app.close();
+  });
+});

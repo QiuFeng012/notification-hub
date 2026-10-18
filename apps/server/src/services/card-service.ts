@@ -11,7 +11,6 @@ import {
   normalizeKeywords,
   type CardKeywords,
   type CardRevision,
-  type CardSchedule,
   type InfoCard,
   type ReExtractPreview,
 } from '@notification-hub/shared';
@@ -19,7 +18,7 @@ import type { Summarizer } from '../ai/types.js';
 import type { SummarizerProvider } from '../ai/provider.js';
 import type { CardRepository } from '../db/repository.js';
 import { enforceKeywords } from '../keywords/keyword-check.js';
-import { buildSchedules, parseSchedule } from '../calendar/date-parser.js';
+import { resolveSchedules } from '../calendar/date-parser.js';
 
 /** 业务规则被违反时抛出，由 HTTP 层映射成 4xx */
 export class ValidationError extends Error {
@@ -71,30 +70,8 @@ function assertCardId(id: string): void {
 }
 
 /**
- * 算出这张卡在日历上的全部日程。
- *
- * 顺序很重要：**先从原文拆分**，再退回 time 文本。
- * 一条通知常常同时写"9月23日12:30开始报名"与"9月24日15:00活动举行"，
- * 而 time 字段只装得下其中一个——只看 time 会把另一件事从日历上丢掉。
- *
- * time 文本仍然有用：它告诉拆分器"哪一件是主日程"（模型已经提炼过，
- * 通常就是这张卡最相关的时间）。两个都解析不出时返回空数组，
- * 表示"排不上日历"——这与"猜一个日期"是两回事。
+ * 可空的文本字段：允许显式传 null 表示清空
  */
-function resolveSchedules(
-  rawText: string,
-  timeText: string | null,
-  anchor: Date,
-): CardSchedule[] {
-  const options = { anchor, timeText };
-  const fromRaw = buildSchedules(rawText, options);
-  if (fromRaw.length > 0) return fromRaw;
-
-  const single = parseSchedule(timeText, options);
-  return single ? [single] : [];
-}
-
-/** 可空的文本字段：允许显式传 null 表示清空 */
 function normalizeOptionalText(  value: unknown,
   field: string,
   max: number,
@@ -264,7 +241,7 @@ export function createCardService(
       // 只看 time 文本会漏掉其中一个（time 只装得下最相关的那一个）。
       // 拆不出来时退回 time 文本的单条；都解析不出就是空——
       // 排不上日历比排错位置安全，界面上会明确说明这张卡没有日期。
-      const schedules = resolveSchedules(rawText, draft.time, createdAt);
+      const schedules = resolveSchedules(rawText, { anchor: createdAt, timeText: draft.time });
 
       const card: InfoCard = {
         id: randomUUID(),
@@ -308,14 +285,22 @@ export function createCardService(
       // **原文优先用这次传上来的**：官方改通知时，新日期只存在于新原文里，
       // 拿旧原文重算会把新日期整条漏掉（真实缺陷：卡片的时间已经改成
       // 10 月 29 日，日历上却还只有旧原文里的 10 月 20 日）。
+      //
+      // 同时把改动前的状态带进去：只改时间、不改原文时，原文里的旧日期仍会被
+      // 解析出来；如果新时间在原文里没有对应句子，那条旧主日程就是被取代的，
+      // 必须从日历上撤掉，否则旧日期会一直留着。
       const anchor = new Date(existing.createdAt);
       const nextTime = patch.time !== undefined ? patch.time : existing.time;
       const nextRawText = patch.rawText ?? existing.rawText;
-      const schedules = resolveSchedules(
-        nextRawText,
-        nextTime,
-        Number.isNaN(anchor.getTime()) ? new Date() : anchor,
-      );
+      const schedules = resolveSchedules(nextRawText, {
+        anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,
+        timeText: nextTime,
+        previous: {
+          rawText: existing.rawText,
+          time: existing.time,
+          schedules: existing.schedules,
+        },
+      });
 
       return repo.update(id, { ...patch, schedules }, reason, note);
     },
@@ -343,11 +328,10 @@ export function createCardService(
       const checked = enforceKeywords(rawText, draft.keyPoints, priority);
 
       const anchor = new Date(existing.createdAt);
-      const schedules = resolveSchedules(
-        rawText,
-        draft.time,
-        Number.isNaN(anchor.getTime()) ? new Date() : anchor,
-      );
+      const schedules = resolveSchedules(rawText, {
+        anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,
+        timeText: draft.time,
+      });
 
       return {
         rawText,

@@ -761,6 +761,60 @@ async function main(): Promise<void> {
 
   const selector = `[data-card-id="${newId}"]`;
 
+  // ---------- 4a. 改时间后日历同步 ----------
+  // 用户报的缺陷：改完信息的时间，日历上没有同步。这里真的在界面上改一次时间，
+  // 再回到日历看时间轴上的条有没有按新时刻挪位置——只测服务端函数是不够的，
+  // 因为"改了没生效"往往死在前端状态没刷新或表单没提交这一层。
+  const editedTime = (() => {
+    const now = new Date();
+    return `${now.getFullYear()}年${now.getMonth() + 1}月${now.getDate()}日 15:00-17:00`;
+  })();
+  const editResult = await cdp.evaluate<string>(`
+    (async () => {
+      const card = document.querySelector(${JSON.stringify(selector)});
+      if (!card) return 'card-not-found';
+      const edit = [...card.querySelectorAll('button')]
+        .find((el) => (el.getAttribute('aria-label') || '').startsWith('修改信息卡'));
+      if (!edit) return 'edit-button-not-found';
+      edit.click();
+
+      const input = await window.__waitFor(() => document.querySelector('#edit-time'));
+      if (!input) return 'time-input-not-found';
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(input, ${JSON.stringify(editedTime)});
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      const save = [...document.querySelectorAll('[data-testid="card-edit-form"] button')]
+        .find((el) => el.textContent.trim() === '保存修改');
+      if (!save) return 'save-button-not-found';
+      save.click();
+      const closed = await window.__waitFor(() => !document.querySelector('[data-testid="card-edit-form"]'));
+      if (!closed) return '保存后表单没有关闭';
+      return 'ok';
+    })()
+  `);
+  check('能在界面上把时间改成 15:00-17:00', editResult === 'ok', editResult);
+
+  const todayIso = (() => {
+    const now = new Date();
+    const pad = (value: number) => String(value).padStart(2, '0');
+    return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  })();
+  const serverAfterEdit = await fetch(`${appUrl}/api/cards`)
+    .then((response) => response.json() as Promise<{ cards: Array<Record<string, unknown>> }>)
+    .catch(() => null);
+  const editedCard = serverAfterEdit?.cards.find((card) => card.id === newId) as
+    | { schedule?: { start?: string; startTime?: string; endTime?: string } }
+    | undefined;
+  check(
+    '改时间后服务端排期跟着更新（不是只改了界面）',
+    editedCard?.schedule?.start === todayIso
+      && editedCard?.schedule?.startTime === '15:00'
+      && editedCard?.schedule?.endTime === '17:00',
+    JSON.stringify(editedCard?.schedule),
+  );
+
   console.log('4b. 日期时间轴：点日期、条位置与单位切换');
   check('切到「日历视图」', await cdp.evaluate<boolean>(`
     (() => {
@@ -792,6 +846,20 @@ async function main(): Promise<void> {
 
   const timelineProblems = await measureDayTimeline(cdp);
   check('时间轴的轴宽与条位置正确', timelineProblems.length === 0, timelineProblems.join('；'));
+
+  const editedBar = await cdp.evaluate<string>(`
+    (() => {
+      const bar = [...document.querySelectorAll('[data-testid="timeline-bar"]')]
+        .find((el) => (el.dataset.entryKey || '').startsWith(${JSON.stringify(`${newId}#`)}));
+      if (!bar) return '找不到改过时间后的那条';
+      return JSON.stringify({ start: bar.dataset.startMin, end: bar.dataset.endMin });
+    })()
+  `);
+  check(
+    '改过时间后，时间轴上的条按新时刻 15:00-17:00 定位',
+    editedBar === JSON.stringify({ start: '900', end: '1020' }),
+    editedBar,
+  );
 
   const ticksBefore = await cdp.evaluate<number>(
     `document.querySelectorAll('[data-testid="timeline-tick"]').length`,

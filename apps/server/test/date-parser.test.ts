@@ -7,6 +7,7 @@ import {
   daysInMonth,
   parseIsoDate,
   parseSchedule,
+  resolveSchedules,
   toIsoDate,
 } from '../src/calendar/date-parser.js';
 
@@ -572,5 +573,103 @@ describe('日程时刻', () => {
     assert.equal(list.length, 1);
     assert.equal(list[0]?.startTime, '14:30');
     assert.equal(list[0]?.endTime, '16:30');
+  });
+});
+
+/**
+ * 卡片的 `time` 字段是「这条通知最主要的时间」，也是用户唯一能直接改的时间。
+ * 排期必须跟着它走，否则日历上会出现两个互相矛盾的时间：
+ *
+ *   · 原文把日期与时刻拆成两行（「⏰检查时间：」换行「10月22号」换行「14：30-17:30」），
+ *     按小句解析的日期那条拿不到时刻，而 time 字段里明明写着；
+ *   · 用户把时间改到原文没写的日期（官方改期），原文里的旧日期仍会被解析出来，
+ *     日历上旧的那条一直不走——这就是「改动完信息的时间后日历没有同步」。
+ */
+describe('resolveSchedules：time 字段驱动主日程的日期与时刻', () => {
+  const RAW = [
+    '⏰检查时间：',
+    '10月22号（第八周周四）',
+    '14：30-17:30',
+    '请于10月20号（下周二）16：00前交表。',
+  ].join('\n');
+  const TIME = '10月22号（第八周周四）14:30-17:30';
+
+  it('原文把日期与时刻分成两行时，用 time 字段补上起止时刻', () => {
+    const list = resolveSchedules(RAW, { anchor: ANCHOR, timeText: TIME });
+
+    assert.equal(list[0]?.start, '2025-10-22');
+    assert.equal(list[0]?.startTime, '14:30');
+    assert.equal(list[0]?.endTime, '17:30');
+    // 另一件事（截止交表）自己的时刻不受影响
+    const deadline = list.find((item) => item.start === '2025-10-20');
+    assert.equal(deadline?.endTime, '16:00');
+  });
+
+  it('时间字段改到原文没有的日期时，旧主日程不再留在日历上', () => {
+    const previous = resolveSchedules(RAW, { anchor: ANCHOR, timeText: TIME });
+    const list = resolveSchedules(RAW, {
+      anchor: ANCHOR,
+      timeText: '10月29号（第九周周四）14:30-18:30',
+      previous: { rawText: RAW, time: TIME, schedules: previous },
+    });
+
+    const starts = list.map((item) => item.start).sort();
+    assert.deepEqual(starts, ['2025-10-20', '2025-10-29']);
+    assert.equal(list[0]?.start, '2025-10-29', '主日程应是时间字段指向的那天');
+    assert.equal(list[0]?.startTime, '14:30');
+    assert.equal(list[0]?.endTime, '18:30');
+  });
+
+  it('只改当天时刻时，主日程的时刻跟着同步', () => {
+    const previous = resolveSchedules(RAW, { anchor: ANCHOR, timeText: TIME });
+    const list = resolveSchedules(RAW, {
+      anchor: ANCHOR,
+      timeText: '10月22号（第八周周四）15:00-18:00',
+      previous: { rawText: RAW, time: TIME, schedules: previous },
+    });
+
+    assert.equal(list[0]?.start, '2025-10-22');
+    assert.equal(list[0]?.startTime, '15:00');
+    assert.equal(list[0]?.endTime, '18:00');
+  });
+
+  it('原文里的时刻被时间字段覆盖（官方改了口径）', () => {
+    const raw = '检查时间：10月22号14:30-17:30。';
+    const previous = resolveSchedules(raw, { anchor: ANCHOR, timeText: '10月22号14:30-17:30' });
+    const list = resolveSchedules(raw, {
+      anchor: ANCHOR,
+      timeText: '10月22号15:00-18:00',
+      previous: { rawText: raw, time: '10月22号14:30-17:30', schedules: previous },
+    });
+
+    assert.equal(list[0]?.startTime, '15:00');
+    assert.equal(list[0]?.endTime, '18:00');
+  });
+
+  it('时间改成原文里本来就有的另一件事时，不删原文写的日程', () => {
+    const previous = resolveSchedules(RAW, { anchor: ANCHOR, timeText: TIME });
+    const list = resolveSchedules(RAW, {
+      anchor: ANCHOR,
+      timeText: '10月20号（下周二）16：00前',
+      previous: { rawText: RAW, time: TIME, schedules: previous },
+    });
+
+    assert.deepEqual(
+      list.map((item) => item.start).sort(),
+      ['2025-10-20', '2025-10-22'],
+      '两件事都写在原文里，不该互相取代',
+    );
+  });
+
+  it('原文一起换掉时以新原文为准，不套用旧原文的取舍', () => {
+    const previous = resolveSchedules(RAW, { anchor: ANCHOR, timeText: TIME });
+    const nextRaw = '检查时间改为10月29号（第九周周四）14:30-18:30。请于10月20号前交表。';
+    const list = resolveSchedules(nextRaw, {
+      anchor: ANCHOR,
+      timeText: '10月29号（第九周周四）14:30-18:30',
+      previous: { rawText: RAW, time: TIME, schedules: previous },
+    });
+
+    assert.deepEqual(list.map((item) => item.start).sort(), ['2025-10-20', '2025-10-29']);
   });
 });

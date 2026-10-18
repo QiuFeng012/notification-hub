@@ -380,7 +380,54 @@ describe('sqlite 仓储', () => {
       .prepare(`SELECT schedule_version FROM cards WHERE id = 'old'`)
       .get() as unknown as { schedule_version: number };
     inspect.close();
-    assert.equal(Number(row.schedule_version), 7, '重算后应记下当前解析版本');
+    assert.equal(Number(row.schedule_version), 8, '重算后应记下当前解析版本');
+  });
+
+  /**
+   * 真实卡片：原文把日期与时刻拆成三行——
+   *     ⏰检查时间：
+   *      10月22号（第八周周四）
+   *      14：30-17:30
+   * 按小句解析时，日期那一行拿不到时刻，而卡片的时间字段里写着完整时间。
+   * 回填必须用 time 字段把 14:30-17:30 补进主日程，否则时间轴上会显示成全天。
+   */
+  it('回填时用 time 字段补上原文没解析到的起止时刻', () => {
+    const dbPath = tempDbPath();
+    mkdirSync(path.dirname(dbPath), { recursive: true });
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`
+      CREATE TABLE cards (
+        id TEXT PRIMARY KEY, title TEXT NOT NULL, time TEXT, source TEXT,
+        key_points TEXT NOT NULL, raw_text TEXT NOT NULL,
+        provider TEXT NOT NULL, created_at TEXT NOT NULL, seq INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    legacy
+      .prepare(
+        `INSERT INTO cards (id, title, time, key_points, raw_text, provider, created_at, seq)
+         VALUES (?, ?, ?, '["要点"]', ?, 'mock', ?, ?)`,
+      )
+      .run(
+        'dorm',
+        '本学期第一次宿舍内务卫生检查通知',
+        '10月22号（第八周周四）14:30-17:30',
+        '⏰检查时间：\n10月22号（第八周周四）\n14：30-17:30\n请于10月20号（下周二）16：00前交表。',
+        '2026-10-13T04:18:03.869Z',
+        1,
+      );
+    legacy.close();
+
+    const repo = createSqliteCardRepository(dbPath);
+    try {
+      const card = repo.get('dorm');
+      assert.equal(card?.schedule?.start, '2026-10-22');
+      assert.equal(card?.schedule?.startTime, '14:30', '时刻应取自 time 字段');
+      assert.equal(card?.schedule?.endTime, '17:30');
+      const deadline = card?.schedules.find((item) => item.start === '2026-10-20');
+      assert.equal(deadline?.endTime, '16:00', '别的日程仍按原文解析');
+    } finally {
+      repo.close();
+    }
   });
 
   it('写入与读回的日程保留起止时刻', () => {

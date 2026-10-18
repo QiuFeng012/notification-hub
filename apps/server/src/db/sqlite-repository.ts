@@ -10,7 +10,7 @@ import type {
   SummaryProvider,
 } from '@notification-hub/shared';
 import { DEFAULT_LIST_LIMIT, type CardRepository } from './repository.js';
-import { buildSchedules, parseSchedule } from '../calendar/date-parser.js';
+import { resolveSchedules } from '../calendar/date-parser.js';
 
 /**
  * seq 是单调递增的插入序号，仅用于排序。
@@ -251,8 +251,12 @@ function rowToRevision(row: RevisionRow): CardRevision {
  *    只继承以「时间/截止」收尾的标题行，不继承任意上一句），
  *    并且主日程不再被强制写成 primary——多日期卡片靠角色标签区分每一条
  * 7：解析日程的起止时刻（startTime / endTime），供日期时间轴按小时定位
+ * 8：主日程的起止时刻改为以卡片的 time 字段为准——
+ *    原文把日期与时刻写成两行时（「⏰检查时间：」换行「10月22号」换行「14：30-17:30」），
+ *    原文那条拿不到时刻，而 time 字段里写着；另外，时间改到原文没有的日期时，
+ *    原来那条主日程会被取代，旧日期不再留在日历上
  */
-const SCHEDULE_VERSION = 7;
+const SCHEDULE_VERSION = 8;
 
 /**
  * 轻量迁移：给老数据库补上没有的列。
@@ -379,14 +383,12 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
     );
     for (const row of pending) {
       const anchor = new Date(row.created_at);
-      const options = {
+      // 从原文拆分（可能得到多条），并用 time 字段补上原文没解析到的时刻；
+      // 解析不出来时退回 time 文本的单条
+      const all = resolveSchedules(row.raw_text, {
         anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,
         timeText: row.time,
-      };
-      // 从原文拆分（可能得到多条），解析不出来时退回 time 文本的单条
-      const schedules = buildSchedules(row.raw_text, options);
-      const fallback = schedules.length === 0 ? parseSchedule(row.time, options) : null;
-      const all = schedules.length > 0 ? schedules : fallback ? [fallback] : [];
+      });
       update.run(
         all[0] ? JSON.stringify(all[0]) : null,
         all.length > 0 ? JSON.stringify(all) : null,
@@ -459,17 +461,17 @@ export function createSqliteCardRepository(dbPath: string): CardRepository {
       //
       // 锚点仍用卡片创建时间：相对日期（"明天"）指的是通知到达那天，不是改动的这天。
       const anchor = new Date(existing.createdAt);
-      const options = {
+      // 优先用调用方算好的（服务端装配时已经算过一次，不必重复劳动）；
+      // 没给就按当前时间文本、原文与改动前的状态现算。
+      const nextSchedules = patch.schedules ?? resolveSchedules(nextRawText, {
         anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,
         timeText: nextTime,
-      };
-      // 优先用调用方算好的（服务端装配时已经算过一次，不必重复劳动）；
-      // 没给就按当前时间文本与原文现算。
-      const fromRaw = patch.schedules ?? buildSchedules(nextRawText, options);
-      const nextSchedules = fromRaw.length > 0 ? fromRaw : (() => {
-        const single = parseSchedule(nextTime, options);
-        return single ? [single] : [];
-      })();
+        previous: {
+          rawText: existing.rawText,
+          time: existing.time,
+          schedules: existing.schedules,
+        },
+      });
 
       const now = new Date().toISOString();
 
@@ -592,16 +594,16 @@ export function createMemoryCardRepository(): CardRepository {
       const nextTime = patch.time !== undefined ? patch.time : existing.time;
       const nextRawText = patch.rawText ?? existing.rawText;
       const anchor = new Date(existing.createdAt);
-      const options = {
+      // 与 sqlite 版同样的口径：每次都重算、优先用调用方算好的，并带上改动前的状态
+      const nextSchedules = patch.schedules ?? resolveSchedules(nextRawText, {
         anchor: Number.isNaN(anchor.getTime()) ? new Date() : anchor,
         timeText: nextTime,
-      };
-      // 与 sqlite 版同样的口径：每次都重算、优先用调用方算好的、退回 time 单条
-      const fromRaw = patch.schedules ?? buildSchedules(nextRawText, options);
-      const nextSchedules = fromRaw.length > 0 ? fromRaw : (() => {
-        const single = parseSchedule(nextTime, options);
-        return single ? [single] : [];
-      })();
+        previous: {
+          rawText: existing.rawText,
+          time: existing.time,
+          schedules: existing.schedules,
+        },
+      });
 
       const updated: InfoCard = {
         ...existing,

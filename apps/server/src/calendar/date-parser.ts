@@ -11,7 +11,7 @@
  * 一条通知可能同时给"报名截止"和"活动开始"两个时间，那需要拆成多条日程。
  */
 
-import type { ScheduleRole } from '@notification-hub/shared';
+import type { CardSchedule, ScheduleRole } from '@notification-hub/shared';
 
 /** YYYY-MM-DD 形式的本地日期 */
 export type IsoDate = string;
@@ -713,19 +713,49 @@ function toSchedule(
  */
 export function buildSchedules(
   text: string | null | undefined,
-  options: ParseScheduleOptions & {
-    /**
-     * 卡片 time 字段的文本，用来指出"哪一件是主日程"。
-     *
-     * 模型已经把 time 提炼成一个具体日期，那通常就是这张卡最主要的时间
-     * （图像采集通知给的是采集日，而不是表格截止日）。没有它时退到
-     * "报名/截止优先、再取最早的"。
-     */
-    timeText?: string | null;
-  },
+  options: BuildSchedulesOptions,
 ): DateSchedule[] {
+  return buildSchedulesWithMeta(text, options).schedules;
+}
+
+/** buildSchedules 的入参；timeText 是卡片的时间字段，用来指出哪件是主日程 */
+export interface BuildSchedulesOptions extends ParseScheduleOptions {
+  /**
+   * 卡片 time 字段的文本，用来指出"哪一件是主日程"。
+   *
+   * 模型已经把 time 提炼成一个具体日期，那通常就是这张卡最主要的时间
+   * （图像采集通知给的是采集日，而不是表格截止日）。没有它时退到
+   * "报名/截止优先、再取最早的"。
+   */
+  timeText?: string | null;
+}
+
+interface BuildSchedulesMetaOptions extends BuildSchedulesOptions {
+  /**
+   * 原文这条主日程已经有时刻时，是否仍用 time 字段的时刻覆盖它。
+   *
+   * 创建/回填时不需要——原文本就写着时刻就听原文的；用户改了时间字段时
+   * 才需要，因为那才是"现在正确"的时间。
+   */
+  overrideClocks?: boolean;
+}
+
+interface BuildSchedulesResult {
+  schedules: DateSchedule[];
+  /**
+   * 主日程是不是 time 字段单独给的（原文里没有与它对应的那一条）。
+   *
+   * 用户把时间改到原文没写的日期时，靠它判断"旧主日程已经被取代"。
+   */
+  primaryFromTimeHint: boolean;
+}
+
+function buildSchedulesWithMeta(
+  text: string | null | undefined,
+  options: BuildSchedulesMetaOptions,
+): BuildSchedulesResult {
   const raw = (text ?? '').trim();
-  if (raw.length === 0) return [];
+  if (raw.length === 0) return { schedules: [], primaryFromTimeHint: false };
 
   const anchor = options.anchor;
 
@@ -808,7 +838,7 @@ export function buildSchedules(
 
     merged.push(toSchedule(dates, inferred, clause, role, normalized, first?.at ?? 0));
   }
-  if (merged.length === 0) return [];
+  if (merged.length === 0) return { schedules: [], primaryFromTimeHint: false };
 
   // 第二层：同一角色里**真正重叠**的合并成一条。
   //
@@ -913,7 +943,7 @@ export function buildSchedules(
 
   const primarySource = allCandidates.find(matchesHint) ?? hintAsSchedule ?? deadlineRanges[0] ??
     [...activityRanges, ...visitRanges, ...primaryCandidates].sort((a, b) => (a.start < b.start ? -1 : 1))[0];
-  if (!primarySource) return [];
+  if (!primarySource) return { schedules: [], primaryFromTimeHint: false };
   /**
    * 主日程**保留它原本判出的角色**，不再统一写成 `primary`。
    *
@@ -921,7 +951,19 @@ export function buildSchedules(
    * 主日程那条的标签丢失，日历上两条只长得一样、分不清哪条是哪条。
    * 现在"哪条是主日程"由数组位置表达（固定排第一），角色留给标签用。
    */
-  const primary: DateSchedule = { ...primarySource };
+  const primaryFromTimeHint = hintAsSchedule !== null && primarySource === hintAsSchedule;
+  /**
+   * 主日程的时刻以卡片的时间字段为准。
+   *
+   * 真实缺陷：原文把日期与时刻分成两行（「⏰检查时间：」换行「10月22号」换行
+   * 「14：30-17:30」），按小句解析时日期那条拿不到时刻——时间轴上就变成全天，
+   * 而卡片上明明白白写着 14:30-17:30。时间字段是模型/用户提炼过的"这件事到底
+   * 几点"，原文解析不到时刻时用它补上；用户改了时间字段时（overrideClocks）
+   * 则以它为准，覆盖原文里的旧时刻。
+   */
+  const primary: DateSchedule = primaryFromTimeHint
+    ? { ...primarySource }
+    : withTimeTextClocks({ ...primarySource }, options.timeText, anchor, options.overrideClocks === true);
 
   // 第二件及以后：与主日程指向同一段、或被主日程完全覆盖的都不再单列，
   // 否则日历上会出现两条完全重合的条。
@@ -944,9 +986,154 @@ export function buildSchedules(
   // 不按时间整体排序：`schedule` 字段就等于 `schedules[0]`，而它要作为卡片上的
   // 「日程」标签与排序依据。按最早排序会让卡片标出次要日期——
   // 图像采集通知的标签会变成 9-25（交表截止），而通知说的是 10-18 采集。
-  if (extras.length === 0) return [primary];
+  if (extras.length === 0) return { schedules: [primary], primaryFromTimeHint };
   extras.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
-  return [primary, ...extras];
+  return { schedules: [primary, ...extras], primaryFromTimeHint };
+}
+
+/**
+ * 把卡片时间字段里的时刻分配给主日程。
+ *
+ * 为什么不直接用 parseSchedule(timeText) 的 startTime/endTime：
+ * 那个函数不知道这条日程是什么角色。原文写「报名开始时间：9月23日12:30」时
+ * 角色是 deadline，12:30 该填 endTime；而时间字段「9月23日12:30」本身没有
+ * 「前/截止」字样，单独解析会被当成 startTime，把截止条画成从中午开始。
+ * 所以这里以原文判出的角色为准，只借用时间字段里的钟点。
+ */
+function withTimeTextClocks(
+  primary: DateSchedule,
+  timeText: string | null | undefined,
+  anchor: Date,
+  override: boolean,
+): DateSchedule {
+  const clocks = timeTextClockFields(timeText, primary, anchor);
+  if (!clocks) return primary;
+
+  const primaryHasClock = Boolean(primary.startTime) || Boolean(primary.endTime);
+  // 创建/回填时原文已经解析出时刻就听原文的；用户改过时间字段时才覆盖
+  if (!override && primaryHasClock) return primary;
+  if (!clocks.startTime && !clocks.endTime) return primary;
+
+  return { ...primary, startTime: clocks.startTime, endTime: clocks.endTime };
+}
+
+/**
+ * 从时间字段里取出与主日程同一天的那组时刻，并按原文判出的角色分配起止端。
+ * 时间字段里没有可识别时刻时返回 null。
+ */
+function timeTextClockFields(
+  timeText: string | null | undefined,
+  primary: DateSchedule,
+  anchor: Date,
+): { startTime: string | null; endTime: string | null } | null {
+  const raw = (timeText ?? '').trim();
+  if (raw.length === 0) return null;
+
+  const text = expandAbbreviatedRanges(stripNumSeparator(normalizeDigits(raw)));
+  const normalized = normalizeClockText(text);
+  if (collectClockTokens(normalized).length === 0) return null;
+
+  const dates = collectExplicitDates(text, anchor);
+  const isoOf = (item: RawDate): IsoDate | null => {
+    if (item.month < 1 || item.month > 12) return null;
+    if (item.day < 1 || item.day > daysInMonth(item.year ?? anchor.getFullYear(), item.month)) return null;
+    const year = item.year ?? inferYear(item.month, item.day, anchor).year;
+    return toIsoDate(new Date(year, item.month - 1, item.day));
+  };
+  // 时间字段可能写了多件事（「9月23日报名，9月24日活动」），
+  // 取落在主日程区间里的那个日期当锚点，避免把另一件事的时刻挂上来。
+  // 有时间字段写了日期、但一个都不落在主日程里，说明它说的是别的事，不借用。
+  const target = dates.find((item) => {
+    const iso = isoOf(item);
+    return iso !== null && iso >= primary.start && iso <= primary.end;
+  });
+  if (dates.length > 0 && !target) return null;
+  const clockAnchor = target?.at ?? 0;
+
+  const hintRole = classifyRole(normalized, clockAnchor);
+  const rawRole = primary.role && primary.role !== 'primary' ? primary.role : null;
+  // 「截止」优先：原文或时间字段任一方说了截止，就该填 endTime
+  const role: ScheduleRole =
+    rawRole === 'deadline' || hintRole === 'deadline' ? 'deadline' : rawRole ?? hintRole;
+
+  const fields = clockFieldsFor(normalized, clockAnchor, role);
+  return fields.startTime || fields.endTime ? fields : null;
+}
+
+/** 改动前的卡片状态：只在"这次保存到底改了什么"的判断里用 */
+export interface PreviousScheduleState {
+  rawText: string;
+  time: string | null;
+  schedules: CardSchedule[];
+}
+
+export interface ResolveSchedulesOptions extends ParseScheduleOptions {
+  /** 卡片 time 字段的文本 */
+  timeText?: string | null;
+  /** 改动前的时间/原文/排期；创建与回填不传 */
+  previous?: PreviousScheduleState;
+}
+
+/** trim 后比较，避免"只多了一个空格"被当成改了时间 */
+function normalizeTimeText(value: string | null | undefined): string {
+  return (value ?? '').trim();
+}
+
+/** 同一件事：日期区间与角色都相同（时刻不参与，时刻本身就是这次要更新的东西） */
+function sameScheduleSlot(a: DateSchedule | CardSchedule, b: DateSchedule | CardSchedule): boolean {
+  return a.start === b.start && a.end === b.end && (a.role ?? 'primary') === (b.role ?? 'primary');
+}
+
+/**
+ * 算出这张卡在日历上的全部日程——**所有入口都应该走这里**。
+ *
+ * 与直接调 buildSchedules 的区别只有一条，但很关键：它知道"改动前是什么样"。
+ * 用户只改「时间」、不改原文时，原文里的旧日期仍会被解析出来；如果新时间在原文里
+ * 找不到对应句子，那条旧主日程就是被新时间取代的，必须从日历上撤掉，
+ * 否则旧日期会一直留着——表现为"改动完时间后日历没有同步"。
+ *
+ * 创建与回填没有 previous，行为与从前一致（原文里的日程全部保留）。
+ */
+export function resolveSchedules(
+  rawText: string | null | undefined,
+  options: ResolveSchedulesOptions,
+): DateSchedule[] {
+  const text = (rawText ?? '').trim();
+  const previous = options.previous;
+  const timeChanged =
+    previous !== undefined && normalizeTimeText(previous.time) !== normalizeTimeText(options.timeText);
+  const rawChanged = previous !== undefined && previous.rawText.trim() !== text;
+
+  const built = buildSchedulesWithMeta(text, {
+    anchor: options.anchor,
+    timeText: options.timeText,
+    overrideClocks: timeChanged,
+  });
+  let schedules = built.schedules;
+
+  if (schedules.length === 0) {
+    const single = parseSchedule(options.timeText, { anchor: options.anchor });
+    if (!single) return [];
+    // 原文里排不出日期时，时间字段就是唯一来源
+    schedules = [single];
+  }
+
+  if (
+    previous === undefined ||
+    rawChanged ||
+    !timeChanged ||
+    !built.primaryFromTimeHint ||
+    schedules.length <= 1
+  ) {
+    return schedules;
+  }
+
+  const oldPrimary = previous.schedules[0];
+  if (!oldPrimary) return schedules;
+
+  // 只按"日期区间 + 角色"精确匹配被取代的那一条：同一天的另一件事
+  // （例如「16:00 前交表」）角色不同，必须保留
+  return schedules.filter((item, index) => index === 0 || !sameScheduleSlot(item, oldPrimary));
 }
 
 /** 两条日程的区间是否真正重叠（含同一天） */
