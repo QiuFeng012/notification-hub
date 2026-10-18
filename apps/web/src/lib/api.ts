@@ -9,6 +9,7 @@ import {
   type ReExtractPreview,
   type SettingsSource,
   type SettingsView,
+  type SystemView,
   type UpdateCardRequest,
   type UpdateSettingsRequest,
   type UpdateSettingsResponse,
@@ -294,6 +295,45 @@ export function createSettingsApi(): SettingsApi {
 
     async clearSettings() {
       return toSettingsView(await requestJson('/api/settings', { method: 'DELETE' }));
+    },
+  };
+}
+
+export interface SystemApi {
+  getSystem(): Promise<SystemView>;
+  setAutostart(enabled: boolean): Promise<SystemView>;
+  shutdown(): Promise<void>;
+  uninstall(): Promise<void>;
+}
+
+/** 归一化服务端返回的系统状态，缺字段时给安全默认值（绝不抛错） */
+export function toSystemView(input: unknown): SystemView {
+  const record = (typeof input === 'object' && input !== null ? input : {}) as Partial<SystemView>;
+  return {
+    autostart: record.autostart === true,
+    port: typeof record.port === 'number' && Number.isInteger(record.port) ? record.port : 5178,
+    dataDir: typeof record.dataDir === 'string' ? record.dataDir : '',
+  };
+}
+
+export function createSystemApi(): SystemApi {
+  return {
+    async getSystem() {
+      return toSystemView(await requestJson('/api/system'));
+    },
+
+    async setAutostart(enabled: boolean) {
+      return toSystemView(
+        await requestJson('/api/system/autostart', { method: 'POST', json: { enabled } }),
+      );
+    },
+
+    async shutdown() {
+      await requestJson('/api/system/shutdown', { method: 'POST' });
+    },
+
+    async uninstall() {
+      await requestJson('/api/system/uninstall', { method: 'POST' });
     },
   };
 }

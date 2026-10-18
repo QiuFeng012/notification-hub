@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, createCardApi } from '../src/lib/api';
+import { ApiError, createCardApi, createSystemApi } from '../src/lib/api';
 
 const SERVER_CARD = {
   id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
@@ -171,5 +171,64 @@ describe('createCardApi.setPinned', () => {
     await expect(createCardApi().setPinned(SERVER_CARD.id, true)).rejects.toMatchObject({
       code: 'INVALID_RESPONSE',
     });
+  });
+});
+
+describe('createSystemApi.getSystem', () => {
+  it('请求 /api/system 并解析状态', async () => {
+    const spy = mockFetch(() => jsonResponse({ autostart: true, port: 5178, dataDir: '/data' }));
+    const system = await createSystemApi().getSystem();
+
+    expect(system).toEqual({ autostart: true, port: 5178, dataDir: '/data' });
+    expect(spy.mock.calls[0]?.[0]).toBe('/api/system');
+  });
+
+  it('缺字段或类型不对时给安全默认值', async () => {
+    mockFetch(() => jsonResponse({ autostart: 'yes', port: 'x', dataDir: 1 }));
+    const system = await createSystemApi().getSystem();
+    expect(system).toEqual({ autostart: false, port: 5178, dataDir: '' });
+  });
+});
+
+describe('createSystemApi.setAutostart', () => {
+  it('POST /api/system/autostart，body {enabled:true} 且声明 Content-Type', async () => {
+    const spy = mockFetch(() => jsonResponse({ autostart: true }));
+    const system = await createSystemApi().setAutostart(true);
+
+    const [url, init] = spy.mock.calls[0] ?? [];
+    expect(url).toBe('/api/system/autostart');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBe(JSON.stringify({ enabled: true }));
+    expect((init?.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+    expect(system.autostart).toBe(true);
+  });
+
+  it('服务端错误信封转成 ApiError', async () => {
+    mockFetch(() => jsonResponse({ error: { code: 'AUTOSTART_FAILED', message: 'boom' } }, 500));
+    await expect(createSystemApi().setAutostart(true)).rejects.toMatchObject({
+      code: 'AUTOSTART_FAILED',
+      status: 500,
+    });
+  });
+});
+
+describe('createSystemApi.shutdown / uninstall', () => {
+  it('shutdown POST 不带 body 与 Content-Type', async () => {
+    const spy = mockFetch(() => new Response(null, { status: 202 }));
+    await createSystemApi().shutdown();
+
+    const [url, init] = spy.mock.calls[0] ?? [];
+    expect(url).toBe('/api/system/shutdown');
+    expect(init?.method).toBe('POST');
+    expect(init?.body).toBeUndefined();
+    expect((init?.headers as Record<string, string>)?.['Content-Type']).toBeUndefined();
+  });
+
+  it('uninstall POST /api/system/uninstall', async () => {
+    const spy = mockFetch(() => new Response(null, { status: 202 }));
+    await createSystemApi().uninstall();
+
+    expect(spy.mock.calls[0]?.[0]).toBe('/api/system/uninstall');
+    expect(spy.mock.calls[0]?.[1]?.method).toBe('POST');
   });
 });
