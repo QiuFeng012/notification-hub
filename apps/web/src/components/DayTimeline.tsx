@@ -218,47 +218,62 @@ export function DayTimeline({
         </div>
       </header>
 
-      <div className="day-timeline__scroll" ref={scrollRef}>
-        <div className="day-timeline__canvas" style={{ width: PLOT_WIDTH }}>
-          <div
-            className="day-timeline__axis"
-            data-testid="timeline-axis"
-            style={{ backgroundSize: `${tickStep}px 100%` }}
-          >
-            <span className="visually-hidden">时间轴 0 点到 24 点</span>
-            {ticks.map((tick) => (
-              <span
-                key={tick.minutes}
-                className={
-                  tick.minutes === 0
-                    ? 'day-timeline__tick day-timeline__tick--first'
-                    : 'day-timeline__tick'
-                }
-                data-testid="timeline-tick"
-                style={{ left: (tick.minutes / 60) * HOUR_WIDTH }}
-              >
-                {tick.label}
-              </span>
-            ))}
-            <span className="day-timeline__axis-end" data-testid="timeline-axis-end">
-              24:00
+      <div className="day-timeline__plot">
+        <div className="day-timeline__y-axis" data-testid="timeline-y-axis" aria-hidden="true">
+          <span className="day-timeline__y-origin">0</span>
+          {rows.map((row, index) => (
+            <span
+              key={row.entry.key}
+              className="day-timeline__y-mark"
+              style={{ top: 28 + index * ROW_HEIGHT + ROW_HEIGHT / 2 }}
+            >
+              -{index + 1}
             </span>
-          </div>
+          ))}
+        </div>
 
-          <div
-            className="day-timeline__rows"
-            style={{ backgroundSize: `${tickStep}px 100%` }}
-          >
-            {rows.map((row, index) => (
-              <TimelineRow
-                key={row.entry.key}
-                row={row}
-                index={index}
-                highlight={highlight}
-                activeKey={activeKey}
-                onSelect={onSelect}
-              />
-            ))}
+        <div className="day-timeline__scroll" ref={scrollRef}>
+          <div className="day-timeline__canvas" style={{ width: PLOT_WIDTH }}>
+            <div
+              className="day-timeline__axis"
+              data-testid="timeline-axis"
+              style={{ backgroundSize: `${tickStep}px 100%` }}
+            >
+              <span className="visually-hidden">时间轴 0 点到 24 点</span>
+              {ticks.map((tick) => (
+                <span
+                  key={tick.minutes}
+                  className={
+                    tick.minutes === 0
+                      ? 'day-timeline__tick day-timeline__tick--first'
+                      : 'day-timeline__tick'
+                  }
+                  data-testid="timeline-tick"
+                  style={{ left: (tick.minutes / 60) * HOUR_WIDTH }}
+                >
+                  {tick.label}
+                </span>
+              ))}
+              <span className="day-timeline__axis-end" data-testid="timeline-axis-end">
+                24:00
+              </span>
+            </div>
+
+            <div
+              className="day-timeline__rows"
+              style={{ backgroundSize: `${tickStep}px 100%` }}
+            >
+              {rows.map((row, index) => (
+                <TimelineRow
+                  key={row.entry.key}
+                  row={row}
+                  index={index}
+                  highlight={highlight}
+                  activeKey={activeKey}
+                  onSelect={onSelect}
+                />
+              ))}
+            </div>
           </div>
         </div>
       </div>

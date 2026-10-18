@@ -1395,9 +1395,46 @@ body {
 }
 
 .day-timeline__scroll {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
   scrollbar-width: thin;
+}
+
+/**
+ * 固定的 y 轴：横向滚动时只让时间部分移动，事件行刻度留在左边，
+ * 这样"第四象限"的纵轴不会随着滚到下午而整条消失。
+ */
+.day-timeline__plot {
+  display: flex;
+  align-items: stretch;
+}
+
+.day-timeline__y-axis {
+  position: relative;
+  flex: 0 0 34px;
+  width: 34px;
+  min-height: 28px;
+  border-right: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
+}
+
+.day-timeline__y-origin {
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.day-timeline__y-mark {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  color: var(--text-dim);
+  font-size: 10px;
 }
 
 .day-timeline__canvas {

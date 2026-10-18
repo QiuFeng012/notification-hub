@@ -66,6 +66,17 @@ describe('DayTimeline', () => {
     expect(screen.getAllByTestId('timeline-bar')).toHaveLength(2);
   });
 
+  it('左侧 y 轴显示事件行的负向刻度', () => {
+    renderTimeline([
+      entry({ startTime: '09:00', endTime: '10:00' }, 'a#0'),
+      entry({ startTime: '14:00', endTime: '15:00' }, 'b#0'),
+    ]);
+    const axis = screen.getByTestId('timeline-y-axis');
+    expect(axis).toHaveTextContent('0');
+    expect(axis).toHaveTextContent('-1');
+    expect(axis).toHaveTextContent('-2');
+  });
+
   it('单位切换只改刻度数量，不改变条位置', async () => {
     renderTimeline([entry({ startTime: '12:30', endTime: '17:30' })]);
     expect(screen.getAllByTestId('timeline-tick')).toHaveLength(24);
