@@ -238,6 +238,19 @@ if (Test-Path $autostartVbs) {
   Check "autostart.vbs 调用 launch-app.ps1 且带 -NoLaunch" ($autostartVbsSrc -match 'launch-app\.ps1' -and $autostartVbsSrc -match '-NoLaunch')
 }
 
+# ---------- 3d. 卸载清理器 ----------
+Write-Host "`n3d. 卸载清理器"
+$cleaner = Join-Path $scriptsDir 'uninstall-cleaner.ps1'
+Check "存在 uninstall-cleaner.ps1" (Test-Path $cleaner)
+if (Test-Path $cleaner) {
+  $cleanerSrc = Get-Content $cleaner -Raw
+  Check "清理器会结束残留服务进程" ($cleanerSrc -match 'dist[\\/]index')
+  Check "清理器等待端口释放（不提前删目录）" ($cleanerSrc -match 'Get-NetTCPConnection|Start-Sleep')
+  Check "清理器复用 install-desktop-app 移除入口" ($cleanerSrc -match 'install-desktop-app\.ps1')
+  Check "清理器复用 set-autostart 移除自启" ($cleanerSrc -match 'set-autostart\.ps1')
+  Check "清理器删除整个项目目录" ($cleanerSrc -match 'Remove-Item \$RepoRoot')
+}
+
 # 编码守卫：Windows PowerShell 5.1 在中文系统上按 GBK 读无 BOM 的 .ps1，
 # 中文全乱码、甚至把解析器弄崩（新机器实测：Unexpected token / Missing '}'）。
 # 含中文的 .ps1 必须带 UTF-8 BOM；.vbs 与 .bat 则干脆全 ASCII。
@@ -454,6 +467,34 @@ if ($Functional) {
 
   $stopFinal = Invoke-Capture (Join-Path $scriptsDir 'stop-server.ps1') @('-Port', "$Port")
   Check "收尾停止正常退出" ($stopFinal.Code -eq 0)
+
+  # ---------- 7. 卸载清理器 ----------
+  # 只在临时目录里造一个假仓库，绝不以真实仓库为 -RepoRoot；
+  # 与生产一致：先把清理器复制到项目目录之外再执行（它会自删副本），
+  # 断言整目录被删、且对已删目标重跑仍退出 0（幂等）。
+  Write-Host "`n7. 卸载清理器（对临时假仓库真实执行）"
+  $tempRepo = Join-Path ([System.IO.Path]::GetTempPath()) ('nh-uninstall-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+  $tempCleaner = Join-Path ([System.IO.Path]::GetTempPath()) ('nh-cleaner-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.ps1')
+  try {
+    New-Item -ItemType Directory -Path (Join-Path $tempRepo 'scripts') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $tempRepo 'data') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $tempRepo 'node_modules') -Force | Out-Null
+    New-Item -ItemType Directory -Path (Join-Path $tempRepo '.git') -Force | Out-Null
+    Set-Content -Path (Join-Path $tempRepo 'data\cards.db') -Value 'x'
+
+    Copy-Item -Path $cleaner -Destination $tempCleaner -Force
+    $clean = Invoke-Capture $tempCleaner @('-RepoRoot', $tempRepo)
+    Check "清理器正常退出" ($clean.Code -eq 0) "退出码 $($clean.Code)：$($clean.Output)"
+    Check "清理器删除了整个假仓库" (-not (Test-Path $tempRepo))
+
+    # 幂等：再复制一份、对已删目标重跑仍应退出 0
+    Copy-Item -Path $cleaner -Destination $tempCleaner -Force
+    $cleanAgain = Invoke-Capture $tempCleaner @('-RepoRoot', $tempRepo)
+    Check "清理器对已删目标重跑仍退出 0（幂等）" ($cleanAgain.Code -eq 0)
+  } finally {
+    Remove-Item $tempRepo -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item $tempCleaner -Force -ErrorAction SilentlyContinue
+  }
 }
 
 Write-Host ""
