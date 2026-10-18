@@ -7,7 +7,8 @@ import { IngestForm } from './components/IngestForm';
 import { SettingsView } from './components/SettingsView';
 import { useCards } from './hooks/useCards';
 import { useSettings } from './hooks/useSettings';
-import { createCardApi, createSettingsApi } from './lib/api';
+import { useSystem } from './hooks/useSystem';
+import { createCardApi, createSettingsApi, createSystemApi } from './lib/api';
 import { toIsoDate } from './lib/date';
 import { readPageFromLocation, writePageToLocation, type AppPage } from './lib/route';
 import { sortCards } from './lib/sort';
@@ -63,17 +64,20 @@ function readMockHintDismissed(): boolean {
 export interface AppProps {
   api?: ReturnType<typeof createCardApi>;
   settingsApi?: ReturnType<typeof createSettingsApi>;
+  systemApi?: ReturnType<typeof createSystemApi>;
   /** 今天，格式 YYYY-MM-DD；注入是为了让日历相关测试结果确定 */
   today?: string;
 }
 
-export default function App({ api, settingsApi, today }: AppProps = {}) {
+export default function App({ api, settingsApi, systemApi, today }: AppProps = {}) {
   const cardApi = useMemo(() => api ?? createCardApi(), [api]);
   const settingsClient = useMemo(() => settingsApi ?? createSettingsApi(), [settingsApi]);
+  const systemClient = useMemo(() => systemApi ?? createSystemApi(), [systemApi]);
 
   const { cards, loading, submitting, error, dismissError, submit, lastCreatedId, edit, revisions, clearRevisions, togglePin, remove } =
     useCards(cardApi);
   const settings = useSettings(settingsClient);
+  const system = useSystem(systemClient);
   const [page, setPage] = useState<AppPage>(readPageFromLocation);
   const [cardView, setCardView] = useState<CardView>(readStoredCardView);
   const [sortMode, setSortMode] = useState<CardSortMode>(readStoredSortMode);
@@ -263,6 +267,14 @@ export default function App({ api, settingsApi, today }: AppProps = {}) {
             saving={settings.saving}
             onSave={settings.save}
             onClear={settings.clear}
+            system={system.system}
+            systemLoading={system.loading}
+            systemBusy={system.busy}
+            systemError={system.error}
+            systemFinishing={system.finishing}
+            onToggleAutostart={() => void system.toggleAutostart()}
+            onShutdown={() => void system.shutdown()}
+            onUninstall={() => void system.uninstall()}
           />
         ) : null}
       </main>

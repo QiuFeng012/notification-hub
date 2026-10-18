@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { DEFAULT_HIGHLIGHT_STYLE } from '@notification-hub/shared';
 import type { CardSchedule, SettingsView } from '@notification-hub/shared';
 import App from '../src/App';
-import { ApiError, type CardApi, type SettingsApi } from '../src/lib/api';
+import { ApiError, type CardApi, type SettingsApi, type SystemApi } from '../src/lib/api';
 import type { CardView } from '../src/lib/card-view';
 import { PAGE_HASHES, type AppPage } from '../src/lib/route';
 
@@ -102,6 +102,20 @@ function createFakeSettingsApi(options: FakeSettingsApiOptions = {}) {
   return api;
 }
 
+function createFakeSystemApi(overrides: Partial<SystemApi> = {}): SystemApi {
+  return {
+    getSystem: vi.fn(async () => ({ autostart: false, port: 5178, dataDir: '/data' })),
+    setAutostart: vi.fn(async (enabled: boolean) => ({
+      autostart: enabled,
+      port: 5178,
+      dataDir: '/data',
+    })),
+    shutdown: vi.fn(async () => undefined),
+    uninstall: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
+
 /**
  * 渲染应用。
  *
@@ -113,9 +127,10 @@ function renderApp(
   settingsApi: SettingsApi = createFakeSettingsApi(),
   today?: string,
   page: AppPage = 'home',
+  systemApi: SystemApi = createFakeSystemApi(),
 ) {
   window.location.hash = PAGE_HASHES[page];
-  return render(<App api={api} settingsApi={settingsApi} today={today} />);
+  return render(<App api={api} settingsApi={settingsApi} today={today} systemApi={systemApi} />);
 }
 
 /** 信息卡只存在于信息卡页，凡是断言卡片的用例都从这一页进 */
@@ -127,7 +142,6 @@ function renderCardsApp(api: CardApi, settingsApi?: SettingsApi, today?: string)
 function renderSettingsApp(api: CardApi = createFakeApi(), settingsApi?: SettingsApi) {
   return renderApp(api, settingsApi, undefined, 'settings');
 }
-
 describe('空态', () => {
   it('没有历史卡片时，信息卡页显示引导文案', async () => {
     renderCardsApp(createFakeApi());
@@ -497,7 +511,7 @@ describe('设置页', () => {
     expect(screen.getByLabelText('DeepSeek API Key')).toHaveValue('');
   });
 
-  it('「外观风格」已经能用了，「开机自启」仍然明确标注没做', async () => {
+  it('「外观风格」已实现，「开机自启」已是真实开关（不再是占位）', async () => {
     try {
       // 「跟随系统」这条要真的读系统偏好，而 jsdom 不实现 matchMedia。
       // 这里只在本用例内伪装，用完就还原，避免影响其他用例。
@@ -506,9 +520,9 @@ describe('设置页', () => {
       renderSettingsApp();
 
       expect(await screen.findByRole('heading', { name: '外观风格' })).toBeInTheDocument();
-      expect(screen.getByRole('heading', { name: '开机自启' })).toBeInTheDocument();
-      // 还差什么要一眼看得见：只剩「开机自启」这一项了
-      expect(screen.getAllByTestId('planned-badge')).toHaveLength(1);
+      // 系统区有真实的开机自启开关，不再是"待实现"占位
+      expect(screen.getByRole('switch', { name: '开机自启' })).toBeInTheDocument();
+      expect(screen.queryByTestId('planned-badge')).not.toBeInTheDocument();
     } finally {
       vi.unstubAllGlobals();
     }
